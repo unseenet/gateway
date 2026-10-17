@@ -5,6 +5,7 @@ One SQLite file:
 - ``ids``: foreign Message-ID <-> Unseenet Message-ID, for threading and for
   never importing the same article twice;
 - ``cursor``: how far each source group has been read;
+- ``authors``: for networks that sign retractions, who wrote an imported message;
 - ``skipped``: counts of articles not imported, by reason (no content kept).
 
 Nothing here says anything about who wrote an article beyond what was public
@@ -33,6 +34,12 @@ CREATE TABLE IF NOT EXISTS cursor (
     source  TEXT NOT NULL,
     high    INTEGER NOT NULL,
     PRIMARY KEY (network, source)
+);
+CREATE TABLE IF NOT EXISTS authors (
+    network    TEXT NOT NULL,
+    foreign_id TEXT NOT NULL,
+    author     TEXT NOT NULL,          -- the author's id in the other network (public there)
+    PRIMARY KEY (network, foreign_id)
 );
 CREATE TABLE IF NOT EXISTS skipped (
     network TEXT NOT NULL,
@@ -64,6 +71,17 @@ class State:
         self.db.execute("INSERT OR REPLACE INTO ids VALUES (?,?,?,?,?,?)",
                         (network, foreign_id, unseenet_id, group_id, direction, int(time.time())))
         self.db.commit()
+
+    def remember_author(self, network: str, foreign_id: str, author: str) -> None:
+        """For networks with signed retractions: who may retract this message."""
+        self.db.execute("INSERT OR REPLACE INTO authors VALUES (?,?,?)",
+                        (network, foreign_id, author))
+        self.db.commit()
+
+    def author_of(self, network: str, foreign_id: str) -> str | None:
+        row = self.db.execute("SELECT author FROM authors WHERE network=? AND foreign_id=?",
+                              (network, foreign_id)).fetchone()
+        return row[0] if row else None
 
     def get_cursor(self, network: str, source: str) -> int | None:
         row = self.db.execute("SELECT high FROM cursor WHERE network=? AND source=?",
