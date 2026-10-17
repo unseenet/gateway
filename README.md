@@ -28,9 +28,17 @@ Unseenet node over Tor.
 
 ```
 src/unseenet_gateway/
-  core/      shared by all networks: keys, state, the Unseenet side
+  core/      shared by all networks: keys, state, Origin-* headers, the Unseenet side
   usenet/    Usenet adapter: conversion, reading from INN, import
 ```
+
+Every imported article carries the shared `Origin-Network`, `Origin-ID`,
+`Origin-Date` and `Origin-From` headers (UN-RFC 0023 section 4.2.1), so a
+client can show gatewayed articles from any network the same way. Headers that
+only make sense for one network keep its prefix (`Usenet-Newsgroups`, …).
+
+Planned networks: FidoNet (`fido.*`) and Matrix (`matrix.*`,
+unseenet/unseenet#116).
 
 What a gateway never does: learn or record anything about who wrote an
 Unseenet post or where it came from. It can stop a key; it cannot identify a

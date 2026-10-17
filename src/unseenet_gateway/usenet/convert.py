@@ -15,7 +15,9 @@ from email.utils import getaddresses
 
 from unseenet.core.article import MAX_SIZE, Article, new_article
 
-# Headers carried into the Unseenet article as Usenet-* (section 4.2)
+from ..core.origin import origin_headers
+
+NETWORK = "usenet"
 MAX_FROM = 128
 MAX_SUBJECT = 256
 NO_ARCHIVE_DAYS = 7
@@ -162,14 +164,9 @@ def convert(raw: bytes, *, carried: dict[str, str], id_map,
         else:
             unmapped = True
 
-    extra: list[tuple[str, str]] = [
-        ("Content-Type", "text/plain; charset=utf-8"),
-        ("Usenet-Message-ID", usenet_id),
-    ]
-    for name in ("Date", "From"):
-        value = raw_header(msg, name)
-        if value:
-            extra.append((f"Usenet-{name}", clean(value, 998)))
+    extra: list[tuple[str, str]] = [("Content-Type", "text/plain; charset=utf-8")]
+    extra += origin_headers(NETWORK, usenet_id, raw_header(msg, "Date"),
+                            raw_header(msg, "From"))
     if len(groups) > 1:
         extra.append(("Usenet-Newsgroups", ",".join(groups)))
     if unmapped and refs_raw:

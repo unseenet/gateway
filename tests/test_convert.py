@@ -51,9 +51,10 @@ def test_basic_article_is_valid_unseenet():
     assert art.group == CARRIED["comp.misc"]
     assert art["From"] == "Ada Lovelace"
     assert art["Subject"] == "Engines"
-    assert art["Usenet-Message-ID"] == "<abc123@example.org>"
-    assert art["Usenet-From"] == "Ada Lovelace <ada@example.org>"
-    assert art["Usenet-Date"] == "Fri, 16 Oct 2026 07:33:05 +0000"
+    assert art["Origin-ID"] == "<abc123@example.org>"
+    assert art["Origin-Network"] == "usenet"
+    assert art["Origin-From"] == "Ada Lovelace <ada@example.org>"
+    assert art["Origin-Date"] == "Fri, 16 Oct 2026 07:33:05 +0000"
     assert "Path" not in art and "Usenet-Newsgroups" not in art
     assert art["Date"] == "Sat, 17 Oct 2026 12:00:00 +0000"     # time of import
 
