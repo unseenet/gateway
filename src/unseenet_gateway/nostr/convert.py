@@ -145,7 +145,7 @@ def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
     extra += origin_headers(NETWORK, ev.id, when, npub(ev.pubkey))
     extra.append(("Origin-Proof", ev.to_json()))
     extra.append(("Nostr-Kind", str(ev.kind)))
-    exp = ev.tag("expiration")              # NIP-40: a request not to keep it (0025 4.5)
+    exp = ev.tag("expiration")              # NIP-40: a request not to keep it (0026 4.5)
     if exp and exp.isdigit():
         base = now or datetime.now(timezone.utc)
         until = min(int(exp), int(base.timestamp()) + 7 * 86400)
