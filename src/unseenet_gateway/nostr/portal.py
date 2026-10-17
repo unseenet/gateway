@@ -115,6 +115,7 @@ class NostrPortal:
         self.manifest: Manifest | None = None
         self.pending: dict[str, _Pending] = {}
         self._warned = ""
+        self._meta_for = ""
         self.cursor_key = f"portal:{group_id}"
         self.opened_key = f"portal-opened:{group_id}"
 
@@ -179,8 +180,9 @@ class NostrPortal:
 
     # --- the Nostr side ---
     async def ensure_counterpart(self) -> None:
-        flag = f"portal-created:{self.source}"
-        if self.state.get_cursor(NETWORK, flag):
+        """Create the NIP-29 group if needed; (re)publish its metadata for each new manifest."""
+        m = self.manifest
+        if m is not None and self._meta_for == m.message_id:
             return
         meta = await self.relay.query({"kinds": [METADATA], "#d": [self.nostr_group]})
         if not meta:
@@ -188,19 +190,18 @@ class NostrPortal:
             ok, msg = await self.relay.publish(ev)
             if not ok and not msg.startswith("duplicate"):
                 raise ExportError(f"cannot create {self.source}: {msg}")
-        m = self.manifest
-        title = (m.title or m.name) if m else self.group_id
+        name = m.name if m else self.group_id
         about = (f"Portal to the Unseenet group {m.name if m else self.group_id} "
                  f"({self.group_id}). Posts are copied both ways by an Unseenet gateway: "
                  "what you write here appears in Unseenet, and Unseenet posts appear here "
                  "with their author's name. https://unseenet.org")
         ev = sign_event(self.sender.secret, EDIT_METADATA, "",
-                        [["h", self.nostr_group], ["name", f"{title} (Unseenet)"],
+                        [["h", self.nostr_group], ["name", f"{name} (Unseenet)"],
                          ["about", about]])
         ok, msg = await self.relay.publish(ev)
         if not ok:
             raise ExportError(f"cannot set metadata on {self.source}: {msg}")
-        self.state.set_cursor(NETWORK, flag, 1)
+        self._meta_for = m.message_id if m else ""
         self.state.set_cursor(NETWORK, f"joined:{self.relay.url}'{self.nostr_group}", 1)
         log.info("portal counterpart %s ready", self.source)
 
