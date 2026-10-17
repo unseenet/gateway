@@ -161,7 +161,7 @@ async def cmd_create_groups(cfg: dict) -> None:
     for net in networks(cfg):
         sec = cfg[net]
         host = sec.get("host", gw.get("host", ""))
-        if net == "nostr" and nostr_key_path(cfg).exists():      # UN-RFC 0025 section 2
+        if net == "nostr" and nostr_key_path(cfg).exists():      # UN-RFC 0026 section 2
             host = npub(nostr_pubkey(keys.load_secret(nostr_key_path(cfg), passphrase(
                 "UNSEENET_GATEWAY_PASSPHRASE", "Passphrase for the GATEWAY key: "))).hex())
         for relay in (nostr_relays(sec) if net == "nostr" else [None]):
