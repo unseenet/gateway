@@ -108,3 +108,30 @@ def test_nip40_expiration_becomes_expires():
     assert art["Expires"] == "Sat, 17 Oct 2026 13:00:00 +0000"
     far = conv(sign_event(ALICE, 9, "long", [["h", "lab"], ["expiration", str(exp + 30 * 86400)]]))
     assert far["Expires"] == "Sat, 24 Oct 2026 12:00:00 +0000"
+
+
+def test_names_from_profile_relay(monkeypatch):
+    import asyncio, json as _json
+    from unseenet_gateway.nostr import importer as imp
+
+    class FakeRelay:
+        def __init__(self, url, proxy=None, events=None, fail=False):
+            self.url, self.events, self.fail = url, events or [], fail
+        async def query(self, *f):
+            if self.fail:
+                raise RuntimeError("blocked: invalid query")
+            return self.events
+        async def close(self):
+            pass
+
+    old = sign_event(ALICE, 0, _json.dumps({"name": "old"}), [])
+    new = sign_event(ALICE, 0, _json.dumps({"display_name": "Alice  A."}), [])
+    new.created_at = old.created_at + 10
+    profiles = FakeRelay("wss://p", events=[new, old])
+    monkeypatch.setattr(imp, "Relay", lambda url, proxy=None: profiles)
+    i = imp.Importer.__new__(imp.Importer)
+    i.relay, i.names, i.looked, i.proxy = FakeRelay("ws://g", fail=True), {}, {}, None
+    i.profile_relays = ["wss://p"]
+    msg = sign_event(ALICE, 9, "hi", [["h", "lab"]])
+    asyncio.run(i._fill_names([msg]))
+    assert i.names[msg.pubkey] == "Alice A."

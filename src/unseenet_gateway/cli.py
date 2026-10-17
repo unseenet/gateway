@@ -202,7 +202,8 @@ def make_importers(cfg: dict, gateway, state: State, node: Node) -> list:
             out.append(NostrImporter(
                 state=state, relay=Relay(relay["url"], proxy=ns.get("proxy")), node=node,
                 gateway=gateway, carried=carried_groups(cfg, "nostr", relay),
-                pow_bits=pow_bits, start=relay.get("start", ns.get("start", "new"))))
+                pow_bits=pow_bits, start=relay.get("start", ns.get("start", "new")),
+                profile_relays=ns.get("profile_relays"), proxy=ns.get("proxy")))
     return out
 
 

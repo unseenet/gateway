@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -21,6 +22,11 @@ from .relay import Relay
 log = logging.getLogger(__name__)
 METADATA, ADMINS = 39000, 39001
 VANISHED_PASSES = 2
+# Relays that collect profiles (kind 0). NIP-29 relays often refuse queries
+# outside a group, so names are looked up here as well.
+PROFILE_RELAYS = ["wss://purplepag.es", "wss://relay.damus.io", "wss://nos.lol",
+                  "wss://relay.primal.net"]
+PROFILE_RETRY = 6 * 3600          # look again for an author without a profile
 
 
 @dataclass
@@ -49,13 +55,17 @@ def source_name(relay_url: str, group: str) -> str:
 class Importer:
     def __init__(self, *, state: State, relay: Relay, node: Node, gateway: crypto.Identity,
                  carried: dict[str, str], pow_bits: int, start: str = "new",
-                 lookback: int = 7 * 86400):
+                 lookback: int = 7 * 86400, profile_relays: list[str] | None = None,
+                 proxy: str | None = None):
         self.state, self.relay, self.node = state, relay, node
         self.gateway, self.carried, self.pow_bits = gateway, carried, pow_bits
         self.start, self.lookback = start, lookback
         self.titles: dict[str, str] = {}
         self.names: dict[str, str | None] = {}
+        self.looked: dict[str, float] = {}      # pubkey -> when we last looked
         self.relay_key: str | None = None
+        self.profile_relays = PROFILE_RELAYS if profile_relays is None else profile_relays
+        self.proxy = proxy
 
     # --- checks ---
     async def group_is_public(self, group: str) -> bool:
@@ -84,20 +94,44 @@ class Importer:
                 self.titles[e.id] = e.tag("title") or (e.content.splitlines() or [""])[0][:80]
 
     async def _fill_names(self, events: list[Event]) -> None:
-        missing = sorted({e.pubkey for e in events} - set(self.names))
+        now = time.time()
+        missing = sorted(pk for pk in {e.pubkey for e in events}
+                         if self.names.get(pk) is None
+                         and now - self.looked.get(pk, 0) > PROFILE_RETRY)
         if not missing:
             return
         for pk in missing:
-            self.names[pk] = None
-        try:
-            for e in await self.relay.query({"kinds": [0], "authors": missing}):
+            self.looked[pk] = now
+        newest: dict[str, int] = {}
+        sources = [self.relay] + [Relay(u, proxy=self.proxy) for u in self.profile_relays
+                                  if u.rstrip("/") != self.relay.url.rstrip("/")]
+        for relay in sources:
+            todo = [pk for pk in missing if pk not in newest]
+            if not todo:
+                break
+            try:
+                found = await asyncio.wait_for(
+                    relay.query({"kinds": [0], "authors": todo}), 20)
+            except Exception as exc:  # noqa: BLE001  (relay may refuse or be down)
+                log.debug("no profiles from %s: %s", relay.url, exc)
+                found = []
+            finally:
+                if relay is not self.relay:
+                    try:
+                        await relay.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            for e in found:                       # signature already checked by Relay
+                if e.pubkey not in missing or e.created_at <= newest.get(e.pubkey, -1):
+                    continue
                 try:
                     meta = json.loads(e.content)
-                    self.names[e.pubkey] = meta.get("display_name") or meta.get("name") or None
+                    name = meta.get("display_name") or meta.get("name") or None
                 except (ValueError, AttributeError):
-                    pass
-        except Exception as exc:  # noqa: BLE001  (relay may not serve kind 0)
-            log.info("no profiles from relay: %s", exc)
+                    continue
+                if isinstance(name, str) and name.strip():
+                    newest[e.pubkey] = e.created_at
+                    self.names[e.pubkey] = " ".join(name.split())[:64]
 
     # --- import ---
     async def run_group(self, group: str, group_id: str) -> RunStats:
