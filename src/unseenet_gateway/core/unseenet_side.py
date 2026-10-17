@@ -1,0 +1,78 @@
+"""Everything the gateway does towards Unseenet, shared by all networks.
+
+The gateway talks to Unseenet like any client: over Tor, to one node, with no
+special status (UN-RFC 0023, section 6.3).
+"""
+
+from __future__ import annotations
+
+import logging
+
+from unseenet.core import crypto
+from unseenet.core.article import Article
+from unseenet.core.groups import make_group_id, manifest_article
+from unseenet.nntp import Client, NNTPError
+
+log = logging.getLogger(__name__)
+
+
+def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str, *,
+                     network: str, foreign_group: str, direction: str, host: str,
+                     operator: str, contact: str, abuse: str = "", policy: str = "",
+                     title: str = "", description: str = "", serial: int = 1,
+                     retention_days: int = 90, pow_bits: int = 18) -> Article:
+    """Manifest of a gatewayed group (section 3.2): moderated, gateway key as moderator."""
+    if direction not in ("import", "both"):
+        raise ValueError("direction must be 'import' or 'both'")
+    gw = {"network": network, "group": foreign_group, "direction": direction,
+          "host": host, "operator": operator, "contact": contact}
+    if abuse:
+        gw["abuse"] = abuse
+    if policy:
+        gw["policy"] = policy[:2048]
+    data = {"v": 1, "name": name, "type": "moderated", "owner": owner.key_text,
+            "serial": serial, "min_pow": 0, "retention_days": retention_days,
+            "moderators": [gateway.key_text], "gateway": gw}
+    if title:
+        data["title"] = title[:128]
+    if description:
+        data["description"] = description[:2048]
+    return manifest_article(owner, make_group_id(name, owner.public_key), data, pow_bits)
+
+
+class Node:
+    """One connection to an Unseenet node, reopened when it drops."""
+
+    def __init__(self, address: str, socks_port: int | None):
+        self.address, self.socks_port = address, socks_port
+        self.client: Client | None = None
+
+    async def _conn(self) -> Client:
+        if self.client is None:
+            self.client = await Client.connect(self.address, self.socks_port)
+        return self.client
+
+    async def post(self, art: Article) -> str:
+        """Post; returns 'ok', 'duplicate' or raises NNTPError for other refusals."""
+        for attempt in (1, 2):
+            try:
+                c = await self._conn()
+                code, text = await c.post(art.to_bytes())
+                break
+            except (ConnectionError, OSError):
+                self.client = None
+                if attempt == 2:
+                    raise
+        if code == 240:
+            return "ok"
+        if code == 441 and text.startswith("duplicate"):
+            return "duplicate"
+        raise NNTPError(code, text)
+
+    async def close(self) -> None:
+        if self.client is not None:
+            try:
+                await self.client.quit()
+            except Exception:  # noqa: BLE001
+                pass
+            self.client = None

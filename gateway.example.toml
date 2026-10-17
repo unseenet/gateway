@@ -1,0 +1,32 @@
+# unseenet-gateway configuration. Copy to gateway.toml.
+# Relative paths are relative to this file.
+
+[gateway]
+state       = "state/gateway.db"       # imported Message-IDs, cursors, skip counts
+gateway_key = "keys/gateway.key"       # moderator key; stays on this host
+group_key   = "keys/group-owner.key"   # owns the groups; move it off this host after create-groups
+group_owner = "ed25519:..."            # PUBLIC key of the group key (printed by `keys`)
+
+# Usenet path identity of this gateway (UN-RFC 0023, section 3.2: `host`)
+host     = "gateway.example.org"
+operator = "ed25519:..."               # the operator's own identity key
+contact  = "operator@..."              # the operator's contact inbox (UN-RFC 0011)
+abuse    = ""                          # e-mail reachable from Usenet; required for export
+policy   = "Text only. Cleanfeed on the INN side. No logs beyond the Message-ID table."
+
+pow_bits = 18      # postage paid per imported article (the node's minimum)
+interval = 60      # seconds between passes in `run`
+
+[unseenet]
+node       = "f6vnchi5p7ll4yn6yot6cz4ohzuxy3uhc3kztafuwn3zlyoup6tn64qd.onion:119"
+socks_port = 9050  # Tor on this host
+
+[usenet]
+server    = "127.0.0.1:119"   # the gateway's own INN
+prefix    = "usenet"          # `test.usenet` on test nodes, so groups expire quickly
+direction = "import"          # or "both" (export is not implemented yet)
+start     = "new"             # first run: "new", "all" or "last:N"
+max_per_run = 200
+groups = [
+    "comp.misc",
+]

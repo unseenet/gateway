@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unseenet-gateway"
+dynamic = ["version"]
+description = "Gateways between Unseenet and other networks, starting with Usenet (UN-RFC 0023)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Andreas Lorensen" }]
+requires-python = ">=3.11"
+dependencies = [
+    "unseenet @ git+https://github.com/unseenet/unseenet.git",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: No Input/Output (Daemon)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Usenet News",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+unseenet-gateway = "unseenet_gateway.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/unseenet/gateway"
+Specification = "https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0023.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "unseenet_gateway.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
