@@ -44,8 +44,23 @@ class Relay:
             finally:
                 self.ws = None
 
+    async def _retry(self, fn, *args):
+        """Run once; if the connection was dropped, reconnect and run again."""
+        try:
+            return await fn(*args)
+        except (websockets.ConnectionClosed, OSError):
+            await self.close()
+            return await fn(*args)
+
     async def publish(self, ev: Event) -> tuple[bool, str]:
         """Send an event; return (accepted, message) from the relay's OK."""
+        return await self._retry(self._publish, ev)
+
+    async def query(self, *filters: dict) -> list[Event]:
+        """Stored events matching any filter, verified, oldest first."""
+        return await self._retry(self._query, *filters)
+
+    async def _publish(self, ev: Event) -> tuple[bool, str]:
         ws = await self.connect()
         await ws.send(json.dumps(["EVENT", ev.to_dict()], ensure_ascii=False))
         async with asyncio.timeout(self.timeout):
@@ -56,8 +71,7 @@ class Relay:
                 if msg[0] == "NOTICE":
                     log.info("relay notice: %s", msg[1])
 
-    async def query(self, *filters: dict) -> list[Event]:
-        """Stored events matching any filter, verified, oldest first."""
+    async def _query(self, *filters: dict) -> list[Event]:
         ws = await self.connect()
         sid = f"q{next(_sub_ids)}"
         await ws.send(json.dumps(["REQ", sid, *filters]))

@@ -100,3 +100,11 @@ def test_cancel_article_signs():
     art = cancel_article(GROUP_ID, "<" + "b" * 32 + "@unseenet>", "Deleted.", now=NOW)
     art.finalize(GW, 8)
     assert art["Control"].startswith("cancel <")
+
+
+def test_nip40_expiration_becomes_expires():
+    exp = int(NOW.timestamp()) + 3600
+    art = conv(sign_event(ALICE, 9, "short-lived", [["h", "lab"], ["expiration", str(exp)]]))
+    assert art["Expires"] == "Sat, 17 Oct 2026 13:00:00 +0000"
+    far = conv(sign_event(ALICE, 9, "long", [["h", "lab"], ["expiration", str(exp + 30 * 86400)]]))
+    assert far["Expires"] == "Sat, 24 Oct 2026 12:00:00 +0000"
