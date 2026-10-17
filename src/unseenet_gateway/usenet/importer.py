@@ -1,4 +1,4 @@
-"""Import from Usenet into Unseenet (UN-RFC 0023, section 4)."""
+"""Import from Usenet into Unseenet (UN-RFC 0023 section 4, UN-RFC 0024 section 4)."""
 
 from __future__ import annotations
 

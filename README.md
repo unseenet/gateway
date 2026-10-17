@@ -1,9 +1,10 @@
 # Unseenet gateway
 
 Gateways between [Unseenet](https://unseenet.org) and other networks, as
-specified in [UN-RFC 0023](https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0023.md).
-Usenet is the first network; FidoNet (`fido.*`) may follow on the same
-principle.
+specified in [UN-RFC 0023](https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0023.md)
+(what every gateway shares) and one profile per network. Usenet is the
+first, specified in [UN-RFC 0024](https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0024.md);
+FidoNet (`fido.*`) and Matrix (`matrix.*`) may follow.
 
 > **Pre-alpha.** Import from Usenet works against a lab setup. Export is not
 > implemented yet. Do not point this at a real Usenet peer without an agreement
@@ -22,8 +23,7 @@ nodes and clients carry it without knowing anything about gateways.
 
 The gateway does not talk to Usenet itself. A local news server (INN) does
 the peering, history, `Path` and spam filtering, and the gateway reads new
-articles from it like a newsreader. Each article is converted (UN-RFC 0023
-section 4), signed with the gateway key, given its postage and posted to an
+articles from it like a newsreader. Each article is converted (UN-RFC 0024), signed with the gateway key, given its postage and posted to an
 Unseenet node over Tor.
 
 ```
@@ -33,7 +33,7 @@ src/unseenet_gateway/
 ```
 
 Every imported article carries the shared `Origin-Network`, `Origin-ID`,
-`Origin-Date` and `Origin-From` headers (UN-RFC 0023 section 4.2.1), so a
+`Origin-Date` and `Origin-From` headers (UN-RFC 0023 section 4.3), so a
 client can show gatewayed articles from any network the same way. Headers that
 only make sense for one network keep its prefix (`Usenet-Newsgroups`, …).
 

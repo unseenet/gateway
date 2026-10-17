@@ -1,4 +1,4 @@
-"""Usenet article -> Unseenet article (UN-RFC 0023, section 4).
+"""Usenet article -> Unseenet article (UN-RFC 0024, section 4).
 
 Pure functions, no I/O, so they can be tested against real articles.
 """

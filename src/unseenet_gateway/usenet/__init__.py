@@ -1,1 +1,1 @@
-"""Usenet adapter (UN-RFC 0023)."""
+"""Usenet adapter (UN-RFC 0024)."""

@@ -17,14 +17,14 @@ log = logging.getLogger(__name__)
 
 
 def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str, *,
-                     network: str, foreign_group: str, direction: str, host: str,
+                     network: str, source: str, direction: str, host: str,
                      operator: str, contact: str, abuse: str = "", policy: str = "",
                      title: str = "", description: str = "", serial: int = 1,
                      retention_days: int = 90, pow_bits: int = 18) -> Article:
-    """Manifest of a gatewayed group (section 3.2): moderated, gateway key as moderator."""
+    """Manifest of a gatewayed group (UN-RFC 0023 section 3.2): moderated, gateway key as moderator."""
     if direction not in ("import", "both"):
         raise ValueError("direction must be 'import' or 'both'")
-    gw = {"network": network, "group": foreign_group, "direction": direction,
+    gw = {"network": network, "source": source, "direction": direction,
           "host": host, "operator": operator, "contact": contact}
     if abuse:
         gw["abuse"] = abuse

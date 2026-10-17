@@ -1,4 +1,4 @@
-"""The gateway's own records (UN-RFC 0023, section 4.3 and 6.2).
+"""The gateway's own records (UN-RFC 0023, sections 4.4 and 6.2).
 
 One SQLite file:
 

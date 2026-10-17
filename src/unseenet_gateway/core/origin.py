@@ -1,4 +1,4 @@
-"""Origin headers, common to every gateway (UN-RFC 0023, section 4.2.1).
+"""Origin headers, common to every gateway (UN-RFC 0023, section 4.3).
 
 Values are copied as the other network gives them and are not checked; they
 are information for the reader, not facts the gateway vouches for.

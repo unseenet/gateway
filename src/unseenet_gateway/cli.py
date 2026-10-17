@@ -89,7 +89,7 @@ async def cmd_create_groups(cfg: dict) -> None:
     for usenet_group, group_id in carried_groups(cfg).items():
         name = group_id.rpartition("@")[0]
         art = gateway_manifest(
-            owner, gateway, name, network="usenet", foreign_group=usenet_group,
+            owner, gateway, name, network="usenet", source=usenet_group,
             direction=us.get("direction", "import"), host=gw["host"],
             operator=gw["operator"], contact=gw["contact"], abuse=gw.get("abuse", ""),
             policy=gw.get("policy", ""), title=f"Usenet: {usenet_group}",

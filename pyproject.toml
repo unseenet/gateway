@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "unseenet-gateway"
 dynamic = ["version"]
-description = "Gateways between Unseenet and other networks, starting with Usenet (UN-RFC 0023)"
+description = "Gateways between Unseenet and other networks, starting with Usenet (UN-RFC 0023, 0024)"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
