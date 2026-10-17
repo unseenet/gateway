@@ -56,22 +56,42 @@ def load_config(path: str) -> dict:
     return cfg
 
 
-def carried_groups(cfg: dict, network: str) -> dict[str, str]:
-    """Source (group, room, …) -> Unseenet Group ID, from the group owner's public key."""
-    owner = crypto.key_from_text(cfg["gateway"]["group_owner"])
-    sec = cfg[network]
-    to_name = usenet_name if network == "usenet" else nostr_name
-    out = {}
-    for g in sec["groups"]:
-        name = to_name(g, sec.get("prefix", network))
-        if name is None:
-            log.warning("%s cannot be gatewayed (name)", g)
-            continue
-        out[g] = make_group_id(name, owner)
+def nostr_relays(sec: dict) -> list[dict]:
+    """[nostr] relay/groups, or one [[nostr.relays]] table per relay."""
+    if "relays" in sec:
+        return sec["relays"]
+    return [{"url": sec["relay"], "groups": sec.get("groups", [])}]
+
+
+def _entries(groups: list) -> list[tuple[str, str | None]]:
+    """Group entries are ids, or {id = "...", name = "..."} to choose the name."""
+    out = []
+    for g in groups:
+        out.append((g["id"], g.get("name")) if isinstance(g, dict) else (g, None))
     return out
 
 
-ONLY: str | None = None   # --network
+def carried_groups(cfg: dict, network: str, relay: dict | None = None) -> dict[str, str]:
+    """Source -> Unseenet Group ID, from the group owner's public key.
+
+    For Nostr, pass one relay table; sources are group ids on that relay.
+    """
+    owner = crypto.key_from_text(cfg["gateway"]["group_owner"])
+    sec = cfg[network]
+    prefix = sec.get("prefix", network)
+    out = {}
+    if network == "usenet":
+        items = [(g, None) for g in sec["groups"]]
+    else:
+        items = _entries(relay["groups"])
+    for source, wanted in items:
+        name = f"{prefix}.{wanted}" if wanted else (
+            usenet_name(source, prefix) if network == "usenet" else nostr_name(source, prefix))
+        if name is None:
+            log.warning("%s cannot be gatewayed (name)", source)
+            continue
+        out[source] = make_group_id(name, owner)
+    return out
 
 
 def networks(cfg: dict) -> list[str]:
@@ -81,9 +101,9 @@ def networks(cfg: dict) -> list[str]:
 def describe(network: str, source: str, sec: dict, host: str) -> tuple[str, str, str]:
     """(manifest source, title, description) for a gatewayed group."""
     if network == "nostr":
-        full = source_name(sec["relay"], source)
+        full = source_name(sec["url"], source)
         return (full, f"Nostr: {source}",
-                f"Gatewayed from the NIP-29 group {source} on {sec['relay']} by {host}. "
+                f"Gatewayed from the NIP-29 group {source} on {sec['url']} by {host}. "
                 "Posts are signed by the gateway; the original signed Nostr event is kept "
                 "in Origin-Proof.")
     return (source, f"Usenet: {source}",
@@ -115,19 +135,20 @@ async def cmd_create_groups(cfg: dict) -> None:
     for net in networks(cfg):
         sec = cfg[net]
         host = sec.get("host", gw.get("host", ""))
-        for source, group_id in carried_groups(cfg, net).items():
-            name = group_id.rpartition("@")[0]
-            src, title, desc = describe(net, source, sec, host)
-            art = gateway_manifest(
-                owner, gateway, name, network=net, source=src,
-                direction=sec.get("direction", "import"), host=host,
-                operator=gw["operator"], contact=gw["contact"], abuse=gw.get("abuse", ""),
-                policy=gw.get("policy", ""), title=title, description=desc,
-                serial=int(sec.get("manifest_serial", 1)),
-                retention_days=int(sec.get("retention_days", 90)),
-                pow_bits=int(gw.get("pow_bits", 18)))
-            result = await node.post(art)
-            print(f"{result:9} {group_id}")
+        for relay in (nostr_relays(sec) if net == "nostr" else [None]):
+            for source, group_id in carried_groups(cfg, net, relay).items():
+                name = group_id.rpartition("@")[0]
+                src, title, desc = describe(net, source, relay or sec, host)
+                art = gateway_manifest(
+                    owner, gateway, name, network=net, source=src,
+                    direction=sec.get("direction", "import"), host=host,
+                    operator=gw["operator"], contact=gw["contact"], abuse=gw.get("abuse", ""),
+                    policy=gw.get("policy", ""), title=title, description=desc,
+                    serial=int(sec.get("manifest_serial", 1)),
+                    retention_days=int(sec.get("retention_days", 90)),
+                    pow_bits=int(gw.get("pow_bits", 18)))
+                result = await node.post(art)
+                print(f"{result:9} {group_id}")
     await node.close()
 
 
@@ -143,10 +164,11 @@ def make_importers(cfg: dict, gateway, state: State, node: Node) -> list:
             start=us.get("start", "new"), max_per_run=int(us.get("max_per_run", 200))))
     if "nostr" in nets:
         ns = cfg["nostr"]
-        out.append(NostrImporter(
-            state=state, relay=Relay(ns["relay"], proxy=ns.get("proxy")), node=node,
-            gateway=gateway, carried=carried_groups(cfg, "nostr"), pow_bits=pow_bits,
-            start=ns.get("start", "new")))
+        for relay in nostr_relays(ns):
+            out.append(NostrImporter(
+                state=state, relay=Relay(relay["url"], proxy=ns.get("proxy")), node=node,
+                gateway=gateway, carried=carried_groups(cfg, "nostr", relay),
+                pow_bits=pow_bits, start=relay.get("start", ns.get("start", "new"))))
     return out
 
 
