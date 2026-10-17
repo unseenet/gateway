@@ -30,3 +30,12 @@ max_per_run = 200
 groups = [
     "comp.misc",
 ]
+
+# Optional: Nostr groups (NIP-29) on one relay.
+# [nostr]
+# relay     = "wss://groups.example.org"
+# prefix    = "nostr"           # `test.nostr` on test nodes
+# host      = "gateway.example.org"
+# direction = "import"
+# start     = "new"             # or "all"
+# groups    = ["group-id"]
