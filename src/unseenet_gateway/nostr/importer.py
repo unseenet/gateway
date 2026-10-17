@@ -20,6 +20,7 @@ from .relay import Relay
 
 log = logging.getLogger(__name__)
 METADATA, ADMINS = 39000, 39001
+VANISHED_PASSES = 2
 
 
 @dataclass
@@ -151,36 +152,52 @@ class Importer:
         return st
 
     async def _deletions(self, group_id: str, st: RunStats) -> None:
-        """Author-signed deletion requests (NIP-09) become Unseenet cancels."""
+        """Messages deleted in the group become Unseenet cancels.
+
+        Two signals count. An author-signed deletion request (NIP-09) for an
+        imported event, when the relay still serves it. And, since a NIP-29
+        relay is the group's authority and often drops both the event and the
+        request: an imported event the relay no longer serves, for
+        VANISHED_PASSES passes in a row, while it still serves others from
+        the same group. A relay that is down or empty serves none, so that
+        never cancels anything.
+        """
         rows = self.state.db.execute(
             "SELECT foreign_id, unseenet_id FROM ids WHERE network=? AND group_id=? "
             "AND direction='in' AND at > strftime('%s','now') - ?",
             (NETWORK, group_id, self.lookback)).fetchall()
-        if not rows:
+        imported = {fid: mid for fid, mid in rows if not fid.startswith("cancel:")}
+        if not imported:
             return
-        imported = dict(rows)
-        authors = {}
-        for i in range(0, len(imported), 200):
-            for e in await self.relay.query({"ids": list(imported)[i:i + 200]}):
-                authors[e.id] = e.pubkey
-        dels = await self.relay.query({"kinds": [DELETION], "#e": list(imported)})
-        for d in dels:
+        served: dict[str, Event] = {}
+        ids = list(imported)
+        for i in range(0, len(ids), 200):
+            for e in await self.relay.query({"ids": ids[i:i + 200]}):
+                served[e.id] = e
+        to_cancel: dict[str, str] = {}
+        for d in await self.relay.query({"kinds": [DELETION], "#e": ids}):
             for eid in d.tag_values("e"):
-                mid = imported.get(eid)
-                key = f"cancel:{eid}"
-                if not mid or self.state.lookup(NETWORK, key):
-                    continue
-                # The author must be the one asking. If the relay has already
-                # dropped the target, we use the author recorded at import.
-                author = authors.get(eid) or self.state.author_of(NETWORK, eid)
-                if author != d.pubkey:
-                    continue
-                art = cancel_article(group_id, mid, "Deleted by its author on Nostr.")
-                art.finalize(self.gateway, self.pow_bits)
-                await self.node.post(art)
-                self.state.remember(NETWORK, key, art.message_id, group_id, "cancel")
-                st.cancelled += 1
-                log.info("cancelled %s (deleted on Nostr)", mid)
+                if eid in imported and (served.get(eid) or None) and served[eid].pubkey == d.pubkey:
+                    to_cancel[eid] = "Deleted by its author on Nostr."
+                elif eid in imported and self.state.author_of(NETWORK, eid) == d.pubkey:
+                    to_cancel[eid] = "Deleted by its author on Nostr."
+        if served:                       # the relay answers for this group at all
+            for eid in ids:
+                if eid in served:
+                    self.state.seen_present(NETWORK, eid)
+                elif self.state.seen_missing(NETWORK, eid) >= VANISHED_PASSES:
+                    to_cancel.setdefault(eid, "Deleted in the Nostr group.")
+            self.state.db.commit()
+        for eid, reason in to_cancel.items():
+            key = f"cancel:{eid}"
+            if self.state.lookup(NETWORK, key):
+                continue
+            art = cancel_article(group_id, imported[eid], reason)
+            art.finalize(self.gateway, self.pow_bits)
+            await self.node.post(art)
+            self.state.remember(NETWORK, key, art.message_id, group_id, "cancel")
+            st.cancelled += 1
+            log.info("cancelled %s (%s)", imported[eid], reason)
 
     async def run(self) -> RunStats:
         total = RunStats()

@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS authors (
     author     TEXT NOT NULL,          -- the author's id in the other network (public there)
     PRIMARY KEY (network, foreign_id)
 );
+CREATE TABLE IF NOT EXISTS vanished (
+    network    TEXT NOT NULL,
+    foreign_id TEXT NOT NULL,
+    passes     INTEGER NOT NULL,       -- consecutive passes the source no longer served it
+    PRIMARY KEY (network, foreign_id)
+);
 CREATE TABLE IF NOT EXISTS skipped (
     network TEXT NOT NULL,
     reason  TEXT NOT NULL,
@@ -82,6 +88,18 @@ class State:
         row = self.db.execute("SELECT author FROM authors WHERE network=? AND foreign_id=?",
                               (network, foreign_id)).fetchone()
         return row[0] if row else None
+
+    def seen_missing(self, network: str, foreign_id: str) -> int:
+        """Count one more pass in which the source did not serve this message."""
+        self.db.execute("INSERT INTO vanished VALUES (?,?,1) ON CONFLICT(network, foreign_id) "
+                        "DO UPDATE SET passes = passes + 1", (network, foreign_id))
+        self.db.commit()
+        return self.db.execute("SELECT passes FROM vanished WHERE network=? AND foreign_id=?",
+                               (network, foreign_id)).fetchone()[0]
+
+    def seen_present(self, network: str, foreign_id: str) -> None:
+        self.db.execute("DELETE FROM vanished WHERE network=? AND foreign_id=?",
+                        (network, foreign_id))
 
     def get_cursor(self, network: str, source: str) -> int | None:
         row = self.db.execute("SELECT high FROM cursor WHERE network=? AND source=?",
