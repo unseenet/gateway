@@ -20,7 +20,8 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
                      network: str, source: str, direction: str, host: str,
                      operator: str, contact: str, abuse: str = "", policy: str = "",
                      title: str = "", description: str = "", serial: int = 1,
-                     retention_days: int = 90, pow_bits: int = 18) -> Article:
+                     retention_days: int = 90, submissions: str | None = None,
+                     pow_bits: int = 18) -> Article:
     """Manifest of a gatewayed group (UN-RFC 0023 section 3.2): moderated, gateway key as moderator."""
     if direction not in ("import", "both"):
         raise ValueError("direction must be 'import' or 'both'")
@@ -33,6 +34,8 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
     data = {"v": 1, "name": name, "type": "moderated", "owner": owner.key_text,
             "serial": serial, "min_pow": 0, "retention_days": retention_days,
             "moderators": [gateway.key_text], "gateway": gw}
+    if submissions:
+        data["submissions"] = submissions
     if title:
         data["title"] = title[:128]
     if description:

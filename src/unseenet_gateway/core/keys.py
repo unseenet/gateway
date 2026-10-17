@@ -36,3 +36,23 @@ def create(path: Path, passphrase: str, label: str) -> crypto.Identity:
 def load(path: Path, passphrase: str) -> crypto.Identity:
     data = json.loads(unseal(Path(path).read_bytes(), passphrase))
     return crypto.Identity.from_seed(bytes.fromhex(data["seed"]))
+
+
+def create_secret(path: Path, passphrase: str, label: str, valid=lambda b: True) -> bytes:
+    """A raw 32-byte secret for another network's key (e.g. Nostr's secp256k1)."""
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(path)
+    secret = os.urandom(32)
+    while not valid(secret):
+        secret = os.urandom(32)
+    payload = json.dumps({"v": 1, "label": label, "secret": secret.hex()}).encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(seal(payload, passphrase))
+    return secret
+
+
+def load_secret(path: Path, passphrase: str) -> bytes:
+    return bytes.fromhex(json.loads(unseal(Path(path).read_bytes(), passphrase))["secret"])

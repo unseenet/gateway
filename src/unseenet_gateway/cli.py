@@ -2,8 +2,9 @@
 
   unseenet-gateway -c gateway.toml keys          create the group key and the gateway key
   unseenet-gateway -c gateway.toml create-groups publish manifests (needs the group key)
-  unseenet-gateway -c gateway.toml import-once   one import pass
-  unseenet-gateway -c gateway.toml run           import every `interval` seconds
+  unseenet-gateway -c gateway.toml nostr-key     create the gateway's Nostr key (for export)
+  unseenet-gateway -c gateway.toml import-once   one pass: import, then export submissions
+  unseenet-gateway -c gateway.toml run           a pass every `interval` seconds
   unseenet-gateway -c gateway.toml stats         what has been imported and skipped
 
 Networks are configured as sections ([usenet], [nostr]); -n limits a command to one.
@@ -31,7 +32,12 @@ from . import __version__
 from .core import keys
 from .core.state import State
 from .core.unseenet_side import Node, gateway_manifest
-from .nostr.convert import unseenet_name as nostr_name
+from unseenet.core.groups import personal_inbox_id
+
+from .core.submissions import Exporter, inbox_manifest
+from .nostr.convert import npub, unseenet_name as nostr_name
+from .nostr.event import N as SECP_N, pubkey_of as nostr_pubkey
+from .nostr.exporter import NostrSender
 from .nostr.importer import Importer as NostrImporter, source_name
 from .nostr.relay import Relay
 from .usenet.convert import unseenet_name as usenet_name
@@ -94,6 +100,10 @@ def carried_groups(cfg: dict, network: str, relay: dict | None = None) -> dict[s
     return out
 
 
+def direction(sec: dict, relay: dict | None) -> str:
+    return (relay or {}).get("direction", sec.get("direction", "import"))
+
+
 def networks(cfg: dict) -> list[str]:
     return [n for n in ("usenet", "nostr") if n in cfg and ONLY in (None, n)]
 
@@ -123,6 +133,20 @@ def cmd_keys(cfg: dict) -> None:
     print("and move the group key file off this host once the groups exist.")
 
 
+def nostr_key_path(cfg: dict) -> Path:
+    gw = cfg["gateway"]
+    return Path(gw.get("nostr_key", str(Path(gw["gateway_key"]).with_name("nostr.key"))))
+
+
+def cmd_nostr_key(cfg: dict) -> None:
+    path = nostr_key_path(cfg)
+    secret = keys.create_secret(path, passphrase(
+        "UNSEENET_GATEWAY_PASSPHRASE", "Passphrase for the GATEWAY key: "), "nostr",
+        valid=lambda b: 0 < int.from_bytes(b, "big") < SECP_N)
+    pk = nostr_pubkey(secret).hex()
+    print(f"nostr key {npub(pk)}\n          {pk}  ({path})")
+
+
 async def cmd_create_groups(cfg: dict) -> None:
     gw = cfg["gateway"]
     owner = keys.load(Path(gw["group_key"]), passphrase(
@@ -132,16 +156,23 @@ async def cmd_create_groups(cfg: dict) -> None:
     if owner.key_text != gw["group_owner"]:
         sys.exit("group_owner in the config does not match the group key")
     node = Node(cfg["unseenet"]["node"], cfg["unseenet"].get("socks_port"))
+    inbox = personal_inbox_id(gateway.public_key)
+    inbox_done = False
     for net in networks(cfg):
         sec = cfg[net]
         host = sec.get("host", gw.get("host", ""))
         for relay in (nostr_relays(sec) if net == "nostr" else [None]):
+            way = direction(sec, relay)
+            if way == "both" and not inbox_done:
+                print(f"{await node.post(inbox_manifest(gateway)):9} {inbox} (submissions)")
+                inbox_done = True
             for source, group_id in carried_groups(cfg, net, relay).items():
                 name = group_id.rpartition("@")[0]
                 src, title, desc = describe(net, source, relay or sec, host)
                 art = gateway_manifest(
                     owner, gateway, name, network=net, source=src,
-                    direction=sec.get("direction", "import"), host=host,
+                    direction=way, host=host,
+                    submissions=inbox if way == "both" else None,
                     operator=gw["operator"], contact=gw["contact"], abuse=gw.get("abuse", ""),
                     policy=gw.get("policy", ""), title=title, description=desc,
                     serial=int(sec.get("manifest_serial", 1)),
@@ -172,6 +203,33 @@ def make_importers(cfg: dict, gateway, state: State, node: Node) -> list:
     return out
 
 
+def make_exporter(cfg: dict, gateway, state: State, node: Node, importers: list):
+    """An Exporter for every gatewayed group with direction "both", or None."""
+    gw, targets = cfg["gateway"], {}
+    if "nostr" in networks(cfg):
+        ns = cfg["nostr"]
+        relays = [r for r in nostr_relays(ns) if direction(ns, r) == "both"]
+        if relays:
+            secret = keys.load_secret(nostr_key_path(cfg), passphrase(
+                "UNSEENET_GATEWAY_PASSPHRASE", "Passphrase for the GATEWAY key: "))
+            for relay in relays:
+                carried = carried_groups(cfg, "nostr", relay)
+                # share the importer's connection to the same relay
+                conn = next((i.relay for i in importers
+                             if getattr(i, "relay", None) and i.relay.url == relay["url"]),
+                            Relay(relay["url"], proxy=ns.get("proxy")))
+                sender = NostrSender(relay=conn, secret=secret, state=state,
+                                     groups={gid: src for src, gid in carried.items()})
+                for gid in carried.values():
+                    targets[gid] = ("nostr", sender.send)
+    if not targets:
+        return None
+    return Exporter(state=state, node=node, gateway=gateway, targets=targets,
+                    min_pow=int(gw.get("export_min_pow", 20)),
+                    per_key_per_hour=int(gw.get("export_per_hour", 10)),
+                    delay_max=float(gw.get("export_delay_max", 600)))
+
+
 async def _close(imp) -> None:
     for attr in ("news", "relay"):
         if hasattr(imp, attr):
@@ -183,7 +241,9 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
     gateway = keys.load(Path(gw["gateway_key"]), passphrase(
         "UNSEENET_GATEWAY_PASSPHRASE", "Passphrase for the GATEWAY key: "))
     node = Node(cfg["unseenet"]["node"], cfg["unseenet"].get("socks_port"))
-    importers = make_importers(cfg, gateway, State(Path(gw["state"])), node)
+    state = State(Path(gw["state"]))
+    importers = make_importers(cfg, gateway, state, node)
+    exporter = make_exporter(cfg, gateway, state, node, importers)
     while True:
         for imp in importers:
             name = type(imp).__module__.split(".")[-2]
@@ -193,6 +253,12 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
             except Exception as exc:  # noqa: BLE001  (one network failing must not stop the others)
                 log.warning("%s pass failed: %s", name, exc)
                 await _close(imp)
+                await node.close()
+        if exporter is not None:
+            try:
+                log.info("export pass done: %s", await exporter.run())
+            except Exception as exc:  # noqa: BLE001
+                log.warning("export pass failed: %s", exc)
                 await node.close()
         if not loop:
             break
@@ -210,7 +276,8 @@ def main() -> None:
     p.add_argument("-n", "--network", choices=["usenet", "nostr"],
                    help="only this network (create-groups, import-once, run)")
     p.add_argument("--version", action="version", version=f"unseenet-gateway {__version__}")
-    p.add_argument("command", choices=["keys", "create-groups", "import-once", "run", "stats"])
+    p.add_argument("command", choices=["keys", "nostr-key", "create-groups", "import-once",
+                                       "run", "stats"])
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO if a.verbose or a.command == "run" else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -219,6 +286,8 @@ def main() -> None:
     ONLY = a.network
     if a.command == "keys":
         cmd_keys(cfg)
+    elif a.command == "nostr-key":
+        cmd_nostr_key(cfg)
     elif a.command == "create-groups":
         asyncio.run(cmd_create_groups(cfg))
     elif a.command in ("import-once", "run"):
