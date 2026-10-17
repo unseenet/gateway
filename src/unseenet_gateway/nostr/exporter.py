@@ -36,8 +36,11 @@ def signature_line(art: Article) -> str:
 
 class NostrSender:
     def __init__(self, *, relay: Relay, secret: bytes, state: State,
-                 groups: dict[str, str]):
+                 groups: dict[str, str], public_url: str | None = None):
         self.relay, self.secret, self.state = relay, secret, state
+        # the relay's address as Nostr clients know it, for tags (the gateway
+        # itself may reach the relay by another address, e.g. on the LAN)
+        self.url = (public_url or relay.url).rstrip("/")
         self.groups = groups            # Unseenet Group ID -> NIP-29 group id on this relay
         self.pubkey = pubkey_of(secret).hex()
 
@@ -73,16 +76,16 @@ class NostrSender:
             tags.append(["title", art.get("Subject", "")[:200]])
         elif parent.kind == CHAT:
             kind = CHAT
-            tags.append(["q", parent.id, self.relay.url, parent.pubkey])
+            tags.append(["q", parent.id, self.url, parent.pubkey])
         else:
             kind = COMMENT
             if parent.kind == COMMENT:
                 root_id, root_kind, root_pk = parent.tag("E"), parent.tag("K"), parent.tag("P")
             else:
                 root_id, root_kind, root_pk = parent.id, str(parent.kind), parent.pubkey
-            tags += [["E", root_id, self.relay.url, root_pk or ""], ["K", root_kind or "11"],
+            tags += [["E", root_id, self.url, root_pk or ""], ["K", root_kind or "11"],
                      ["P", root_pk or parent.pubkey],
-                     ["e", parent.id, self.relay.url, parent.pubkey], ["k", str(parent.kind)],
+                     ["e", parent.id, self.url, parent.pubkey], ["k", str(parent.kind)],
                      ["p", parent.pubkey]]
         ev = sign_event(self.secret, kind, content, tags)
         ok, msg = await self.relay.publish(ev)

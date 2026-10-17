@@ -39,6 +39,7 @@ from .nostr.convert import npub, unseenet_name as nostr_name
 from .nostr.event import N as SECP_N, pubkey_of as nostr_pubkey
 from .nostr.exporter import NostrSender
 from .nostr.importer import Importer as NostrImporter, source_name
+from .nostr.portal import NostrPortal
 from .nostr.relay import Relay
 from .usenet.convert import unseenet_name as usenet_name
 from .usenet.importer import Importer as UsenetImporter
@@ -207,6 +208,37 @@ def make_importers(cfg: dict, gateway, state: State, node: Node) -> list:
     return out
 
 
+def make_portals(cfg: dict, gateway, state: State, node: Node) -> list:
+    """Portals ([[portals]]): Unseenet groups with a counterpart on another network.
+
+    [[portals]]
+    group = "test.portal@<fingerprint>"   # the Unseenet group ID
+    network = "nostr"
+    relay = "wss://nostr.unseenet.org"    # as in the manifest's portal source
+    connect = "ws://10.0.0.5:2929"        # optional: how the gateway reaches it
+    id = "test-portal"                    # the NIP-29 group id
+    """
+    out = []
+    if ONLY not in (None, "nostr"):
+        return out
+    entries = [p for p in cfg.get("portals", []) if p.get("network", "nostr") == "nostr"]
+    if not entries:
+        return out
+    ns, gw = cfg.get("nostr", {}), cfg["gateway"]
+    secret = keys.load_secret(nostr_key_path(cfg), passphrase(
+        "UNSEENET_GATEWAY_PASSPHRASE", "Passphrase for the GATEWAY key: "))
+    for p in entries:
+        out.append(NostrPortal(
+            state=state, node=node, gateway=gateway,
+            relay=Relay(p.get("connect", p["relay"]), proxy=ns.get("proxy")),
+            public_url=p["relay"], secret=secret, group_id=p["group"],
+            nostr_group=p.get("id") or p["group"].rpartition("@")[0].replace(".", "-"),
+            pow_bits=int(gw.get("pow_bits", 18)),
+            delay_max=float(p.get("delay_max", gw.get("export_delay_max", 600))),
+            profile_relays=ns.get("profile_relays"), proxy=ns.get("proxy")))
+    return out
+
+
 def make_exporter(cfg: dict, gateway, state: State, node: Node, importers: list):
     """An Exporter for every gatewayed group with direction "both", or None."""
     gw, targets = cfg["gateway"], {}
@@ -248,9 +280,11 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
     state = State(Path(gw["state"]))
     importers = make_importers(cfg, gateway, state, node)
     exporter = make_exporter(cfg, gateway, state, node, importers)
+    importers += make_portals(cfg, gateway, state, node)
     while True:
         for imp in importers:
-            name = type(imp).__module__.split(".")[-2]
+            name = ("portal " + imp.group_id if hasattr(imp, "nostr_group")
+                    else type(imp).__module__.split(".")[-2])
             try:
                 st = await imp.run()
                 log.info("%s pass done: %s", name, st)
