@@ -12,6 +12,7 @@ as the Unseenet vault).
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,10 @@ from pathlib import Path
 from unseenet.core import crypto
 from unseenet.core.vault import seal, unseal
 
+
+def passphrase(env: str, prompt: str) -> str:
+    """From the environment variable ``env``, or asked for."""
+    return os.environ.get(env) or getpass.getpass(prompt)
 
 def create(path: Path, passphrase: str, label: str) -> crypto.Identity:
     path = Path(path)

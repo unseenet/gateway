@@ -112,7 +112,7 @@ def test_nip40_expiration_becomes_expires():
 
 def test_names_from_profile_relay(monkeypatch):
     import asyncio, json as _json
-    from unseenet_gateway.nostr import importer as imp
+    from unseenet_gateway.nostr import feed as imp
 
     class FakeRelay:
         def __init__(self, url, proxy=None, events=None, fail=False):
@@ -129,7 +129,7 @@ def test_names_from_profile_relay(monkeypatch):
     new.created_at = old.created_at + 10
     profiles = FakeRelay("wss://p", events=[new, old])
     monkeypatch.setattr(imp, "Relay", lambda url, proxy=None: profiles)
-    i = imp.Importer.__new__(imp.Importer)
+    i = imp.NostrFeed.__new__(imp.NostrFeed)
     i.relay, i.names, i.looked, i.proxy = FakeRelay("ws://g", fail=True), {}, {}, None
     i.profile_relays = ["wss://p"]
     msg = sign_event(ALICE, 9, "hi", [["h", "lab"]])

@@ -28,10 +28,17 @@ Unseenet node over Tor.
 
 ```
 src/unseenet_gateway/
-  core/      shared by all networks: keys, state, Origin-* headers, the Unseenet side
-  usenet/    Usenet adapter: conversion, reading from INN, import
-  nostr/     Nostr adapter: NIP-29 groups, BIP-340 signatures, import
+  core/      shared by all networks: the adapter contract, the import loop,
+             export queue, portals, keys, state, Origin-* headers, the Unseenet side
+  usenet/    Usenet adapter: conversion, reading from INN
+  nostr/     Nostr adapter: NIP-29 groups, BIP-340 signatures, export, portals
 ```
+
+The core does what UN-RFC 0023 asks of every gateway; an adapter does only
+what its network needs, as its profile specifies (UN-RFC 0023 section 9).
+The core knows no network by name: adapters are found through the
+`unseenet_gateway.adapters` entry point group, and each reads its own section
+of `gateway.toml`. See [Writing an adapter](#writing-an-adapter).
 
 **Nostr.** The adapter reads public NIP-29 groups from a relay. It checks that
 the group's metadata is signed by the relay and that the group is not private,
@@ -76,6 +83,34 @@ Passphrases are read from `UNSEENET_GATEWAY_PASSPHRASE` (gateway key) and
 `UNSEENET_GATEWAY_GROUP_PASSPHRASE` (group key), or asked for. After
 `create-groups`, move the group key file off the gateway host: it is only
 needed again to change a group's manifest.
+
+## Writing an adapter
+
+An adapter for a new network can live in its own package; nothing here has
+to change. The contract is in `src/unseenet_gateway/core/adapter.py`, and the
+smallest complete example is the loopback adapter in
+`tests/test_adapter_core.py`. In short:
+
+- a subclass of `Adapter` with `network` (its hierarchy, reserved in
+  UN-RFC 0023 section 9) and `capabilities` (export, retractions, portals);
+- `carried()`: which foreign groups become which Unseenet groups, for the
+  manifests;
+- `feeds()`: one `Feed` per connection. A feed yields `Incoming` messages
+  from `fetch()` and converts each with `convert()` (or raises `Skip`). The
+  core skips duplicates, signs, pays postage, posts, threads and cancels;
+- optionally `export_targets()` (a `send` per group) and `counterpart()`
+  for portals;
+- an entry point:
+
+  ```toml
+  [project.entry-points."unseenet_gateway.adapters"]
+  matrix = "unseenet_gateway_matrix:MatrixAdapter"
+  ```
+
+The Python API belongs to this implementation, not to the UN-RFCs: they
+specify what a gateway does, so a gateway written in another language is
+just as correct. A new network also needs a profile UN-RFC and its hierarchy
+reserved in the root list.
 
 ## Development
 
