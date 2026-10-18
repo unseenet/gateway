@@ -6,7 +6,8 @@ the group's manifest (`portals`); the gateway then
 1. creates the counterpart on the other network (the adapter's job),
 2. exports articles posted in the Unseenet group *after* the portal was
    opened (the authors of older ones were never warned), after a random
-   delay, as for any export (section 5),
+   delay, as for any export (section 5). The time an article is due is kept
+   in the state, so it survives a restart and one-off passes (import-once),
 3. imports what is written in the counterpart into the Unseenet group,
    signed by the gateway key and carrying Origin-* headers (section 4).
 
@@ -21,6 +22,7 @@ Everything here is the same for every network; the network's side is a
 from __future__ import annotations
 
 import logging
+import math
 import random
 import time
 from dataclasses import dataclass, field
@@ -112,6 +114,29 @@ class Portal:
         self.cursor_key = f"portal:{group_id}"
         self.opened_key = f"portal-opened:{group_id}"
 
+    # --- the delay, kept in the state ---
+    def _due_key(self, mid: str) -> str:
+        return f"portal-due:{self.group_id}:{mid}"
+
+    def _due(self, mid: str, now: float) -> float:
+        """When ``mid`` may go out: drawn once, then the same on every pass."""
+        key = self._due_key(mid)
+        due = self.state.get_cursor("unseenet", key)
+        if due is None:
+            due = math.floor(now + random.uniform(0, self.delay_max))
+            self.state.set_cursor("unseenet", key, due)
+        return float(due)
+
+    def _forget_due(self, mid: str | None = None) -> None:
+        """Forget one article's due time, or (None) all of this portal's."""
+        if mid is None:
+            self.state.db.execute("DELETE FROM cursor WHERE network=? AND source LIKE ?",
+                                  ("unseenet", f"portal-due:{self.group_id}:%"))
+        else:
+            self.state.db.execute("DELETE FROM cursor WHERE network=? AND source=?",
+                                  ("unseenet", self._due_key(mid)))
+        self.state.db.commit()
+
     # --- the Unseenet side ---
     async def _read_group(self) -> list[tuple[int, Article]]:
         """New articles in the Unseenet group; the first pass reads it all, for the manifest."""
@@ -156,6 +181,7 @@ class Portal:
                                   ("unseenet", self.opened_key))
             self.state.db.commit()
             self.pending.clear()
+            self._forget_due()
             log.info("portal %s closed by manifest #%d", self.group_id, n)
 
     @property
@@ -193,8 +219,7 @@ class Portal:
             if self.state.foreign_for(art.message_id):
                 continue
             if exportable(art, self.gateway.public_key) is None:
-                self.pending[art.message_id] = _Pending(
-                    n, now + random.uniform(0, self.delay_max), art)
+                self.pending[art.message_id] = _Pending(n, self._due(art.message_id, now), art)
         for mid, p in sorted(self.pending.items(), key=lambda kv: kv[1].number):
             if p.due > now:
                 continue
@@ -204,9 +229,11 @@ class Portal:
                 st.refused += 1
                 log.warning("portal %s: %s refused %s: %s", self.group_id, self.network, mid, exc)
                 del self.pending[mid]
+                self._forget_due(mid)
                 continue
             self.state.remember(self.network, fid, mid, self.group_id, "out")
             del self.pending[mid]
+            self._forget_due(mid)
             st.exported += 1
             log.info("portal exported %s -> %s", mid, fid[:16])
         st.waiting = len(self.pending)
