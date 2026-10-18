@@ -1,4 +1,4 @@
-"""Import from NIP-29 Nostr groups into Unseenet."""
+"""Reading NIP-29 Nostr groups on one relay (UN-RFC 0026 section 4)."""
 
 from __future__ import annotations
 
@@ -7,15 +7,13 @@ import json
 import logging
 import time
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
 
-from unseenet.core import crypto
-from unseenet.nntp import NNTPError
+from unseenet.core.article import Article
 
+from ..core.adapter import Feed, Incoming, Retraction, Source
 from ..core.state import State
-from ..core.unseenet_side import Node
-from .convert import (COMMENT, DELETION, IMPORTED_KINDS, NETWORK, Skip, cancel_article,
-                      convert)
+from .convert import COMMENT, DELETION, IMPORTED_KINDS, NETWORK, convert
 from .event import Event
 from .relay import Relay
 
@@ -27,15 +25,6 @@ VANISHED_PASSES = 2
 PROFILE_RELAYS = ["wss://purplepag.es", "wss://relay.damus.io", "wss://nos.lol",
                   "wss://relay.primal.net"]
 PROFILE_RETRY = 6 * 3600          # look again for an author without a profile
-
-
-@dataclass
-class RunStats:
-    imported: int = 0
-    duplicate: int = 0
-    skipped: int = 0
-    refused: int = 0
-    cancelled: int = 0
 
 
 def relay_pubkey(url: str, timeout: float = 20.0) -> str | None:
@@ -52,20 +41,26 @@ def source_name(relay_url: str, group: str) -> str:
     return f"{relay_url}'{group}"
 
 
-class Importer:
-    def __init__(self, *, state: State, relay: Relay, node: Node, gateway: crypto.Identity,
-                 carried: dict[str, str], pow_bits: int, start: str = "new",
-                 lookback: int = 7 * 86400, profile_relays: list[str] | None = None,
-                 proxy: str | None = None):
-        self.state, self.relay, self.node = state, relay, node
-        self.gateway, self.carried, self.pow_bits = gateway, carried, pow_bits
+class NostrFeed(Feed):
+    network = NETWORK
+
+    def __init__(self, *, state: State, relay: Relay, carried: dict[str, str],
+                 start: str = "new", lookback: int = 7 * 86400,
+                 profile_relays: list[str] | None = None, proxy: str | None = None,
+                 label: str | None = None):
+        self.state, self.relay, self.carried = state, relay, carried
         self.start, self.lookback = start, lookback
+        self.label = label or f"nostr {relay.url}"
         self.titles: dict[str, str] = {}
         self.names: dict[str, str | None] = {}
         self.looked: dict[str, float] = {}      # pubkey -> when we last looked
         self.relay_key: str | None = None
         self.profile_relays = PROFILE_RELAYS if profile_relays is None else profile_relays
         self.proxy = proxy
+        self._read: set[str] = set()            # groups read to the end in this pass
+
+    def sources(self) -> list[Source]:
+        return [Source(g, gid) for g, gid in self.carried.items()]
 
     # --- checks ---
     async def group_is_public(self, group: str) -> bool:
@@ -134,59 +129,43 @@ class Importer:
                     self.names[e.pubkey] = " ".join(name.split())[:64]
 
     # --- import ---
-    async def run_group(self, group: str, group_id: str) -> RunStats:
-        st = RunStats()
+    async def fetch(self, source: Source) -> AsyncIterator[Incoming]:
+        group = source.foreign
+        self._read.discard(group)
         src = source_name(self.relay.url, group)
         if not await self.group_is_public(group):
-            return st
+            return
         since = self.state.get_cursor(NETWORK, src)
         flt = {"#h": [group], "kinds": list(IMPORTED_KINDS)}
         if since is not None:
             flt["since"] = since
         elif self.start == "new":
             self.state.set_cursor(NETWORK, src, int(time.time()))
-            return st
+            return
         events = await self.relay.query(flt)
         await self._fill_titles(events)
         await self._fill_names(events)
         newest = since or 0
         for ev in events:
             newest = max(newest, ev.created_at)
-            if self.state.lookup(NETWORK, ev.id):
-                st.duplicate += 1
-                continue
-            try:
-                art = convert(ev, group_id=group_id,
-                              id_map=lambda eid: self.state.lookup(NETWORK, eid),
-                              title_of=self.titles.get, name_of=self.names.get)
-            except Skip as s:
-                st.skipped += 1
-                self.state.count_skip(NETWORK, s.reason)
-                continue
-            art.finalize(self.gateway, self.pow_bits)
-            try:
-                result = await self.node.post(art)
-            except NNTPError as exc:
-                st.refused += 1
-                self.state.count_skip(NETWORK, f"node-{exc.text.split(':')[0]}")
-                log.warning("node refused %s: %s", ev.id, exc)
-                continue
-            self.state.remember(NETWORK, ev.id, art.message_id, group_id)
-            self.state.remember_author(NETWORK, ev.id, ev.pubkey)
-            if ev.kind == 11:
-                self.titles[ev.id] = art["Subject"]
-            if result == "duplicate":
-                st.duplicate += 1
-            else:
-                st.imported += 1
-                log.info("imported %s -> %s %s", ev.id[:16], art.message_id, group_id)
+            yield Incoming(ev.id, ev, label=ev.id[:16])
         # Same second may hold more events: step back one second, duplicates are skipped.
         self.state.set_cursor(NETWORK, src, max(newest - 1, 0) if newest else since or 0)
-        await self._deletions(group_id, st)
-        return st
+        self._read.add(group)
 
-    async def _deletions(self, group_id: str, st: RunStats) -> None:
-        """Messages deleted in the group become Unseenet cancels.
+    def convert(self, source: Source, item: Incoming) -> Article:
+        return convert(item.payload, group_id=source.group_id,
+                       id_map=lambda eid: self.state.lookup(NETWORK, eid),
+                       title_of=self.titles.get, name_of=self.names.get)
+
+    def imported(self, item: Incoming, art: Article) -> None:
+        ev: Event = item.payload
+        self.state.remember_author(NETWORK, ev.id, ev.pubkey)
+        if ev.kind == 11:
+            self.titles[ev.id] = art["Subject"]
+
+    async def retractions(self, source: Source) -> list[Retraction]:
+        """Messages deleted in the group, to be cancelled in Unseenet.
 
         Two signals count. An author-signed deletion request (NIP-09) for an
         imported event, when the relay still serves it. And, since a NIP-29
@@ -196,13 +175,15 @@ class Importer:
         the same group. A relay that is down or empty serves none, so that
         never cancels anything.
         """
+        if source.foreign not in self._read:     # not public, or a first "new" pass
+            return []
         rows = self.state.db.execute(
             "SELECT foreign_id, unseenet_id FROM ids WHERE network=? AND group_id=? "
             "AND direction='in' AND at > strftime('%s','now') - ?",
-            (NETWORK, group_id, self.lookback)).fetchall()
+            (NETWORK, source.group_id, self.lookback)).fetchall()
         imported = {fid: mid for fid, mid in rows if not fid.startswith("cancel:")}
         if not imported:
-            return
+            return []
         served: dict[str, Event] = {}
         ids = list(imported)
         for i in range(0, len(ids), 200):
@@ -222,21 +203,7 @@ class Importer:
                 elif self.state.seen_missing(NETWORK, eid) >= VANISHED_PASSES:
                     to_cancel.setdefault(eid, "Deleted in the Nostr group.")
             self.state.db.commit()
-        for eid, reason in to_cancel.items():
-            key = f"cancel:{eid}"
-            if self.state.lookup(NETWORK, key):
-                continue
-            art = cancel_article(group_id, imported[eid], reason)
-            art.finalize(self.gateway, self.pow_bits)
-            await self.node.post(art)
-            self.state.remember(NETWORK, key, art.message_id, group_id, "cancel")
-            st.cancelled += 1
-            log.info("cancelled %s (%s)", imported[eid], reason)
+        return [Retraction(eid, imported[eid], reason) for eid, reason in to_cancel.items()]
 
-    async def run(self) -> RunStats:
-        total = RunStats()
-        for group, group_id in self.carried.items():
-            st = await self.run_group(group, group_id)
-            for f in total.__dataclass_fields__:
-                setattr(total, f, getattr(total, f) + getattr(st, f))
-        return total
+    async def close(self) -> None:
+        await self.relay.close()

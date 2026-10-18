@@ -12,6 +12,8 @@ from email.utils import format_datetime
 
 from unseenet.core.article import MAX_SIZE, Article, new_article
 
+from ..core.adapter import Skip  # noqa: F401  (shared by all networks)
+from ..core.importer import cancel_article  # noqa: F401
 from ..core.origin import origin_headers
 from .event import Event
 
@@ -26,10 +28,6 @@ _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
 
-class Skip(Exception):
-    def __init__(self, reason: str, detail: str = ""):
-        super().__init__(f"{reason}: {detail}" if detail else reason)
-        self.reason = reason
 
 
 # --- names and keys ---------------------------------------------------------
@@ -156,10 +154,3 @@ def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
     if len(art.to_bytes()) + 400 > MAX_SIZE:
         raise Skip("size")
     return art
-
-
-def cancel_article(group_id: str, target_mid: str, reason: str, *,
-                   now: datetime | None = None) -> Article:
-    """An Unseenet cancel (UN-RFC 0004 section 7) for an imported article."""
-    return new_article(group_id, None, reason + "\n",
-                       extra=[("Control", f"cancel {target_mid}")], now=now)

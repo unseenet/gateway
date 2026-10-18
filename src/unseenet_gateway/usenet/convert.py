@@ -15,6 +15,7 @@ from email.utils import getaddresses
 
 from unseenet.core.article import MAX_SIZE, Article, new_article
 
+from ..core.adapter import Skip  # noqa: F401  (shared by all networks)
 from ..core.origin import origin_headers
 
 NETWORK = "usenet"
@@ -28,12 +29,6 @@ _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _MSGID = re.compile(r"<[^<>\s]+@[^<>\s]+>")
 
 
-class Skip(Exception):
-    """The article is not imported. ``reason`` is a short, loggable word."""
-
-    def __init__(self, reason: str, detail: str = ""):
-        super().__init__(f"{reason}: {detail}" if detail else reason)
-        self.reason = reason
 
 
 @dataclass

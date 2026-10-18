@@ -30,6 +30,11 @@ fast = ["coincurve>=20"]   # optional: faster Nostr signatures
 [project.scripts]
 unseenet-gateway = "unseenet_gateway.cli:main"
 
+# Network adapters. Other packages add theirs in the same group.
+[project.entry-points."unseenet_gateway.adapters"]
+usenet = "unseenet_gateway.usenet.adapter:UsenetAdapter"
+nostr = "unseenet_gateway.nostr.adapter:NostrAdapter"
+
 [project.urls]
 Homepage = "https://github.com/unseenet/gateway"
 Specification = "https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0023.md"

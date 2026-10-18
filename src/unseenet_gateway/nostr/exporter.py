@@ -16,6 +16,7 @@ import logging
 from unseenet.core import crypto
 from unseenet.core.article import Article
 
+from ..core.adapter import ExportError
 from ..core.state import State
 from .convert import CHAT, COMMENT, FROM_UNSEENET_TAG, NETWORK, THREAD
 from .event import pubkey_of, sign_event
@@ -23,10 +24,6 @@ from .relay import Relay
 
 log = logging.getLogger(__name__)
 JOIN = 9021
-
-
-class ExportError(Exception):
-    pass
 
 
 def signature_line(art: Article) -> str:
