@@ -118,3 +118,78 @@ def test_builtin_adapters_are_registered():
     assert list(known)[:2] == ["usenet", "nostr"]
     assert known["nostr"].capabilities.portals and "nostr-key" in known["nostr"].commands
     assert not known["usenet"].capabilities.export
+
+
+# --- portals: the delay survives one-off passes --------------------------------
+from unseenet.core.groups import manifest_article  # noqa: E402
+
+from unseenet_gateway.core import portal as portal_mod  # noqa: E402
+from unseenet_gateway.core.adapter import Counterpart  # noqa: E402
+
+PORTAL = make_group_id("loop.portal", OWNER.public_key)
+USER = crypto.Identity.generate()
+
+
+class GroupClient:
+    def __init__(self, arts):
+        self.arts = arts
+
+    async def group(self, gid):
+        return len(self.arts), 1, len(self.arts)
+
+    async def article(self, n):
+        return self.arts[int(n) - 1].to_bytes()
+
+
+class PortalNode(FakeNode):
+    def __init__(self, arts):
+        super().__init__()
+        self.client = GroupClient(arts)
+
+    async def _conn(self):
+        return self.client
+
+
+class LoopCounterpart(Counterpart):
+    network, source = "loop", "room"
+
+    def __init__(self, state):
+        self.feed = LoopFeed(state, [])
+        self.sent = []
+
+    async def ensure(self, manifest):
+        pass
+
+    async def send(self, art):
+        self.sent.append(art.message_id)
+        return f"loop-{len(self.sent)}"
+
+
+def test_portal_delay_survives_one_off_passes(tmp_path, monkeypatch):
+    manifest = manifest_article(OWNER, PORTAL, {
+        "v": 1, "name": "loop.portal", "type": "open", "owner": OWNER.key_text, "serial": 1,
+        "min_pow": 0, "retention_days": 90,
+        "portals": [{"network": "loop", "source": "room", "gateway": [GW.key_text]}]}, 0)
+    post = new_article(PORTAL, "Hello", "Through the portal.")
+    post.finalize(USER, 0)
+    state = State(tmp_path / "gw.db")
+    clock = [1_000_000.0]
+    monkeypatch.setattr(portal_mod.time, "time", lambda: clock[0])
+    monkeypatch.setattr(portal_mod.random, "uniform", lambda lo, hi: 12.0)
+
+    def one_pass():                       # a fresh Portal each time, as import-once
+        cp = LoopCounterpart(state)
+        p = portal_mod.Portal(state=state, node=PortalNode([manifest, post]), gateway=GW,
+                              counterpart=cp, group_id=PORTAL, pow_bits=0, delay_max=20)
+        return asyncio.run(p.run()), cp
+
+    st, cp = one_pass()                   # due in 12 s
+    assert (st.exported, st.waiting) == (0, 1)
+    clock[0] += 5
+    assert one_pass()[0].waiting == 1     # the same due time, not drawn again
+    clock[0] += 10
+    st, cp = one_pass()
+    assert st.exported == 1 and cp.sent == [post.message_id]
+    st, cp = one_pass()
+    assert st.exported == 0 and st.waiting == 0
+    assert state.get_cursor("unseenet", f"portal-due:{PORTAL}:{post.message_id}") is None
