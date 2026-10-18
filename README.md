@@ -2,13 +2,26 @@
 
 Gateways between [Unseenet](https://unseenet.org) and other networks, as
 specified in [UN-RFC 0023](https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0023.md)
-(what every gateway shares) and one profile per network. Usenet is the
-first, specified in [UN-RFC 0024](https://github.com/unseenet/unseenet/blob/main/rfc/un-rfc-0024.md);
-FidoNet (`fido.*`) and Matrix (`matrix.*`) may follow.
+(what every gateway shares) and one profile per network.
 
-> **Pre-alpha.** Import from Usenet and from Nostr groups (NIP-29) works
-> against a lab setup. Export is not implemented yet. Do not point this at a
-> real Usenet peer without an agreement with its administrators.
+The gateway is a generic core with one **adapter** per network. The core does
+everything Unseenet's rules ask of every gateway; an adapter only reaches its
+network and converts messages. Two adapters come with it, and they are also
+the reference for writing new ones:
+
+| Adapter  | Network               | Hierarchy  | Profile     | Status in the lab               |
+|----------|-----------------------|------------|-------------|---------------------------------|
+| `usenet` | Usenet, through INN   | `usenet.*` | UN-RFC 0024 | import                          |
+| `nostr`  | Nostr groups (NIP-29) | `nostr.*`  | UN-RFC 0026 | import, export, portals         |
+
+Adapters for other networks – FidoNet, Matrix, IRC, XMPP, the fediverse and
+others whose names UN-RFC 0023 section 9 reserves – are meant to be easy to
+add, also by others and in their own repositories, without any change to
+this one. See [Writing an adapter](#writing-an-adapter).
+
+> **Pre-alpha.** Everything above runs against a lab setup only. Export to
+> Usenet is not implemented yet. Do not point this at a real Usenet peer
+> without an agreement with its administrators.
 
 ## How it works
 
@@ -55,7 +68,7 @@ client can show gatewayed articles from any network the same way. Headers that
 only make sense for one network keep its prefix (`Usenet-Newsgroups`, …).
 
 Planned networks: FidoNet (`fido.*`) and Matrix (`matrix.*`,
-unseenet/unseenet#116). Nostr: unseenet/unseenet#120.
+unseenet/unseenet#116).
 
 What a gateway never does: learn or record anything about who wrote an
 Unseenet post or where it came from. It can stop a key; it cannot identify a
@@ -86,8 +99,11 @@ needed again to change a group's manifest.
 
 ## Writing an adapter
 
-An adapter for a new network can live in its own package; nothing here has
-to change. The contract is in `src/unseenet_gateway/core/adapter.py`, and the
+Usenet and Nostr are reference adapters, not the limit: an adapter for
+another network can be written by anyone and live in its own package;
+nothing here has to change. Usenet shows a network reached through a local
+server and read by article number; Nostr shows one with several relays,
+signed messages, deletions, export and portals. The contract is in `src/unseenet_gateway/core/adapter.py`, and the
 smallest complete example is the loopback adapter in
 `tests/test_adapter_core.py`. In short:
 
@@ -111,6 +127,11 @@ The Python API belongs to this implementation, not to the UN-RFCs: they
 specify what a gateway does, so a gateway written in another language is
 just as correct. A new network also needs a profile UN-RFC and its hierarchy
 reserved in the root list.
+
+This is all the documentation for adapter authors so far: the contract in
+`core/adapter.py`, this section and the two reference adapters. The API may
+still change before Unseenet 1.0, and fuller documentation will follow once
+it has settled.
 
 ## Development
 
