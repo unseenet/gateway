@@ -19,7 +19,7 @@ from unseenet.core.article import Article
 
 from ..core.adapter import Counterpart, ExportError
 from ..core.state import State
-from .client import Matrix, MatrixError
+from .client import Matrix, MatrixError, q
 from .convert import NETWORK
 from .exporter import MatrixSender
 from .feed import MatrixFeed, openness
@@ -95,8 +95,31 @@ class MatrixCounterpart(Counterpart):
                     await self.matrix.put_state(rid, etype, content)
                 except MatrixError as exc:
                     log.warning("portal %s: cannot set %s: %s", self.alias, etype, exc)
+        await self._ensure_admins(rid)
         self._meta_for = m.message_id if m else ""
         log.info("portal counterpart %s ready", self.alias)
+
+    async def _ensure_admins(self, rid: str) -> None:
+        """Admins named in the configuration get full power and an invitation, also
+        when they are added after the room was created. Nobody is ever demoted here."""
+        if not self.admins:
+            return
+        pl = await self.matrix.state(rid, "m.room.power_levels") or {}
+        users = dict(pl.get("users") or {})
+        missing = [a for a in self.admins if users.get(a, 0) < 100]
+        if missing:
+            users.update({a: 100 for a in missing})
+            try:
+                await self.matrix.put_state(rid, "m.room.power_levels", {**pl, "users": users})
+            except MatrixError as exc:
+                log.warning("portal %s: cannot make %s admins: %s", self.alias, missing, exc)
+        for a in self.admins:
+            m = await self.matrix.state(rid, "m.room.member", a)
+            if (m or {}).get("membership") not in ("join", "invite"):
+                try:
+                    await self.matrix.call("POST", f"/rooms/{q(rid)}/invite", body={"user_id": a})
+                except MatrixError as exc:
+                    log.warning("portal %s: cannot invite %s: %s", self.alias, a, exc)
 
     async def send(self, art: Article) -> str:
         return await self.sender.send(art)
