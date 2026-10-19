@@ -39,8 +39,8 @@ class NostrAdapter(Adapter):
     capabilities = Capabilities(export=True, retractions=True, portals=True)
     commands = {"nostr-key": "create the gateway's Nostr key (for export)"}
 
-    def __init__(self, cfg: dict):
-        super().__init__(cfg)
+    def __init__(self, cfg: dict, desk=None):
+        super().__init__(cfg, desk)
         self._secret: bytes | None = None
 
     # --- configuration ---

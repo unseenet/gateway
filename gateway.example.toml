@@ -10,9 +10,15 @@ group_owner = "ed25519:..."            # PUBLIC key of the group key (printed by
 # Usenet path identity of this gateway (UN-RFC 0023, section 3.2: `host`)
 host     = "gateway.example.org"
 operator = "ed25519:..."               # the operator's own identity key
-contact  = "operator@..."              # the operator's contact inbox (UN-RFC 0011)
+contact  = "inbox@..."                 # that key's personal inbox: requests and complaints
 abuse    = ""                          # e-mail reachable from Usenet; required for export
 policy   = "Text only. Cleanfeed on the INN side. No logs beyond the Message-ID table."
+
+# Requests (Matrix: a room that invites the gateway but is not configured) are sent
+# to the operator's inbox; the operator answers "approve" or "decline <reason>".
+# operator must be the operator's own key and contact its personal inbox (inbox@...).
+# requests  = true       # false: ignore invitations from rooms not configured
+# auto_create = false    # true: publish the group at once on approval (group key on this host)
 
 pow_bits = 18      # postage paid per imported article (the node's minimum)
 interval = 60      # seconds between passes in `run`

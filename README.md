@@ -115,6 +115,26 @@ Passphrases are read from `UNSEENET_GATEWAY_PASSPHRASE` (gateway key) and
 `create-groups`, move the group key file off the gateway host: it is only
 needed again to change a group's manifest.
 
+## Requests from other networks
+
+A source can ask to be gatewayed. On Matrix, a room asks by inviting the
+gateway's account; a room that is not in the configuration then becomes a
+**request in the operator's own Unseenet inbox** (`gateway.contact`, the personal
+inbox of `gateway.operator`): what the room is, who invited, and the group name
+it would get. The operator answers the post from any Unseenet client:
+
+```
+approve                 gateway it under the proposed name
+approve matrix.x.name   ... under another name
+decline <reason>        the room's invitation is declined with this reason
+```
+
+Only answers signed by the operator key count. With `auto_create = true` the
+gateway publishes the approved group itself (the group key must then be on the
+gateway host) and joins the room within a pass; otherwise approval only marks
+it, and the operator runs `create-groups`. Spaces, private and encrypted rooms
+are declined without asking. Each room is asked about once.
+
 ## Writing an adapter
 
 Usenet, Nostr and Matrix are reference adapters, not the limit: an adapter for
