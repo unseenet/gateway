@@ -165,10 +165,11 @@ class Adapter:
     # extra CLI commands: name -> one line of help; run by run_command(name)
     commands: ClassVar[dict[str, str]] = {}
 
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, desk=None):
         self.cfg = cfg
         self.gw = cfg["gateway"]
         self.section: dict = cfg.get(self.network, {})
+        self.desk = desk          # core/desk.py: requests decided by the operator, if any
 
     # --- naming ---
     @property
@@ -198,6 +199,11 @@ class Adapter:
     def counterpart(self, entry: dict, *, state, feeds: list[Feed]) -> Counterpart:
         """The counterpart for one [[portals]] entry of this network."""
         raise NotImplementedError
+
+    async def handle_requests(self, desk, feeds: list[Feed]) -> None:
+        """Turn requests from the other network into questions to the operator, and
+        answer the other side once the operator has decided (core/desk.py). A network
+        without a way to ask does nothing here."""
 
     def run_command(self, name: str) -> None:
         raise NotImplementedError(name)

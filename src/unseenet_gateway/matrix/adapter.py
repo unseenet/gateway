@@ -29,6 +29,7 @@ Portals (UN-RFC 0037 section 7), one [[portals]] table each::
 from __future__ import annotations
 
 import asyncio
+import logging
 import getpass
 import os
 from pathlib import Path
@@ -39,9 +40,10 @@ from ..core.adapter import Adapter, Capabilities, Carried, Feed, Send
 from .client import Matrix
 from .convert import NETWORK, unseenet_name
 from .exporter import MatrixSender
-from .feed import MatrixFeed
+from .feed import MatrixFeed, openness
 from .portal import MatrixCounterpart
 
+log = logging.getLogger(__name__)
 TOKEN_ENV = "UNSEENET_GATEWAY_MATRIX_TOKEN"
 PASSWORD_ENV = "UNSEENET_GATEWAY_MATRIX_PASSWORD"
 
@@ -51,8 +53,8 @@ class MatrixAdapter(Adapter):
     capabilities = Capabilities(export=True, retractions=True, portals=True)
     commands = {"matrix-login": "log the gateway's Matrix account in and save its token"}
 
-    def __init__(self, cfg: dict):
-        super().__init__(cfg)
+    def __init__(self, cfg: dict, desk=None):
+        super().__init__(cfg, desk)
         self._matrix: Matrix | None = None
 
     # --- configuration ---
@@ -83,11 +85,20 @@ class MatrixAdapter(Adapter):
         return self.section.get("user", super().host())
 
     def rooms(self) -> list[tuple[str, Carried]]:
-        """(room alias or id, Carried) for each configured room."""
+        """(room alias or id, Carried) for each configured room, and each room the
+        operator approved from their inbox (core/desk.py)."""
         out, host = [], self.host()
-        for r in self.section.get("rooms", []):
+        entries = list(self.section.get("rooms", []))
+        configured = {(e["room"] if isinstance(e, dict) else e) for e in entries}
+        if self.desk is not None:
+            entries += [{"room": r.source, "full_name": r.name}
+                        for r in self.desk.approved(self.network) if r.source not in configured]
+        for r in entries:
             room, wanted = (r["room"], r.get("name")) if isinstance(r, dict) else (r, None)
-            name = f"{self.prefix}.{wanted}" if wanted else unseenet_name(room, self.prefix)
+            if isinstance(r, dict) and r.get("full_name"):
+                name = r["full_name"]
+            else:
+                name = f"{self.prefix}.{wanted}" if wanted else unseenet_name(room, self.prefix)
             if name is None:
                 raise SystemExit(f"matrix room {room}: give it a name (rooms = [{{room = ..., "
                                  "name = ...}}]); a room id has no name of its own")
@@ -142,6 +153,58 @@ class MatrixAdapter(Adapter):
         return MatrixCounterpart(state=state, matrix=matrix, alias=entry["room"],
                                  group_id=entry["group"], admins=entry.get("admins", []),
                                  max_pages=int(self.section.get("max_pages", 10)))
+
+    async def handle_requests(self, desk, feeds: list[Feed]) -> None:
+        """Invitations from rooms this gateway does not carry (gateway#10).
+
+        A room that is a space, not public or encrypted is declined with the reason,
+        as before. Otherwise the operator is asked once; the invitation stays pending
+        until they decide. A room they declined gets its invitation declined with their
+        reason. An approved room is carried from the next pass on (the CLI rebuilds).
+        """
+        feed = next((f for f in feeds if isinstance(f, MatrixFeed)), None)
+        if feed is None:
+            return
+        m = feed.matrix
+        invites = await m.invites()
+        if not invites:
+            return
+        carried = set()
+        for room in feed.carried:
+            try:
+                carried.add(await feed.room_id(room))
+            except Exception:  # noqa: BLE001  (an alias that is gone: not ours to answer)
+                continue
+        for rid, state in invites.items():
+            if rid in carried:
+                continue                            # the feed joins it itself
+            by_type = {e.get("type"): (e.get("content") or {}, e.get("sender", ""))
+                       for e in state if e.get("type") != "m.room.member"}
+            alias = (by_type.get("m.room.canonical_alias", ({}, ""))[0]).get("alias")
+            source = alias or rid
+            req = desk.get(self.network, source)
+            if req is not None and req.status == "declined":
+                await m.leave(rid, req.reason or "Declined by the gateway's operator.")
+                log.info("%s: declined again (%s)", source, req.reason)
+                continue
+            if req is not None:
+                continue                            # pending, or approved and not yet built
+            refusal = openness(state)
+            if refusal:
+                await m.leave(rid, "Unseenet gateways carry only public, unencrypted rooms: "
+                                   f"this one is {refusal}.")
+                log.info("%s: invitation declined: %s", source, refusal)
+                continue
+            me = await m.whoami()
+            inviter = next((e.get("sender") for e in state
+                            if e.get("type") == "m.room.member" and e.get("state_key") == me), "?")
+            name = (by_type.get("m.room.name", ({}, ""))[0]).get("name", "")
+            topic = (by_type.get("m.room.topic", ({}, ""))[0]).get("topic", "")
+            detail = (f"The Matrix room {source} invited this gateway ({me}).\n"
+                      f"Invited by: {inviter}\nRoom id:    {rid}\n"
+                      f"Name:       {name or '-'}\nTopic:      {(topic or '-')[:500]}")
+            await desk.ask(self.network, source, title=alias or name or rid, detail=detail,
+                           name=unseenet_name(alias, self.prefix) if alias else None)
 
     def run_command(self, name: str) -> None:
         if name != "matrix-login":
