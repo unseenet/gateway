@@ -157,6 +157,8 @@ def test_openness():
     assert "not public" in openness(st("invite"))
     assert "not public" in openness(st("knock"))
     assert openness(st()) == "of unknown join rule"
+    space = st("public") + [{"type": "m.room.create", "content": {"type": "m.space"}}]
+    assert openness(space) == "a space, not a room"
 
 
 def test_invites_are_tracked_across_incremental_syncs():
