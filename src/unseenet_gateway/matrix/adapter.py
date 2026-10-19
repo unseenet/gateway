@@ -16,6 +16,14 @@ proxy for reaching the homeserver).
 
 The gateway only reads rooms whose moderators invited its account
 (UN-RFC 0023 section 6.1), and leaves them alone once it is kicked.
+
+Portals (UN-RFC 0037 section 7), one [[portals]] table each::
+
+    [[portals]]
+    group   = "unseenet@ph5fc5hop5232qsz"
+    network = "matrix"
+    room    = "#unseenet:unseenet.org"     # created on the gateway's own server
+    admins  = ["@someone:example.org"]     # optional: invited, full power in the room
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ from .client import Matrix
 from .convert import NETWORK, unseenet_name
 from .exporter import MatrixSender
 from .feed import MatrixFeed
+from .portal import MatrixCounterpart
 
 TOKEN_ENV = "UNSEENET_GATEWAY_MATRIX_TOKEN"
 PASSWORD_ENV = "UNSEENET_GATEWAY_MATRIX_PASSWORD"
@@ -39,7 +48,7 @@ PASSWORD_ENV = "UNSEENET_GATEWAY_MATRIX_PASSWORD"
 
 class MatrixAdapter(Adapter):
     network = NETWORK
-    capabilities = Capabilities(export=True, retractions=True, portals=False)
+    capabilities = Capabilities(export=True, retractions=True, portals=True)
     commands = {"matrix-login": "log the gateway's Matrix account in and save its token"}
 
     def __init__(self, cfg: dict):
@@ -124,6 +133,15 @@ class MatrixAdapter(Adapter):
         sender = MatrixSender(matrix=feed.matrix, state=state, rooms=rooms,
                               room_id_of=feed.room_id)
         return {gid: sender.send for gid in rooms}
+
+    def counterpart(self, entry: dict, *, state, feeds: list[Feed]) -> MatrixCounterpart:
+        """[[portals]] entry: group, network = "matrix", room (an alias on the gateway's
+        own server), optional admins (Matrix users invited with full power)."""
+        feed = next((f for f in feeds if isinstance(f, MatrixFeed)), None)
+        matrix = feed.matrix if feed else self.matrix()
+        return MatrixCounterpart(state=state, matrix=matrix, alias=entry["room"],
+                                 group_id=entry["group"], admins=entry.get("admins", []),
+                                 max_pages=int(self.section.get("max_pages", 10)))
 
     def run_command(self, name: str) -> None:
         if name != "matrix-login":

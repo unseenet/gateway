@@ -13,7 +13,7 @@ the reference for writing new ones:
 |----------|-----------------------|------------|-------------|---------------------------------|
 | `usenet` | Usenet, through INN   | `usenet.*` | UN-RFC 0024 | import                          |
 | `nostr`  | Nostr groups (NIP-29) | `nostr.*`  | UN-RFC 0026 | import, export, portals         |
-| `matrix` | Matrix rooms          | `matrix.*` | UN-RFC 0037 (draft) | import, export          |
+| `matrix` | Matrix rooms          | `matrix.*` | UN-RFC 0037 (draft) | import, export, portals |
 
 Adapters for other networks – FidoNet, IRC, XMPP, the fediverse and
 others whose names UN-RFC 0023 section 9 reserves – are meant to be easy to
@@ -80,8 +80,10 @@ as new articles referring to the old one, and redactions as cancels. Images
 and files are left out. With `direction = "both"` the bot also writes
 submissions from Unseenet into the room, as replies where they answer
 something, naming the Unseenet author and key. The gateway never sends
-typing notifications, read receipts or presence. Virtual users per Unseenet
-key (an Application Service) and portals are later steps.
+typing notifications, read receipts or presence. Portals work too: the bot
+creates a public room on its own homeserver for an Unseenet group whose owner
+opened one, with optional human admins. Virtual users per Unseenet key (an
+Application Service) are a later step.
 
 Planned networks: FidoNet (`fido.*`).
 

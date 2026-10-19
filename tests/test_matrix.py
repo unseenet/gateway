@@ -196,3 +196,51 @@ def test_alias_is_pinned_to_its_first_room(tmp_path):
     mx.target = "!two:x"
     with pytest.raises(RoomMoved):
         asyncio.run(MatrixFeed(state=st, matrix=mx, carried={}).room_id("#lab:x"))
+
+
+def test_portal_counterpart_needs_an_alias(tmp_path):
+    from unseenet_gateway.core.state import State
+    from unseenet_gateway.matrix.portal import MatrixCounterpart, portal_topic
+    with pytest.raises(ValueError):
+        MatrixCounterpart(state=State(tmp_path / "s.db"), matrix=None, alias="!id:x",
+                          group_id=GROUP_ID)
+    cp = MatrixCounterpart(state=State(tmp_path / "s.db"), matrix=None,
+                           alias="#unseenet:unseenet.org", group_id=GROUP_ID,
+                           admins=["@a:example.org"])
+    assert cp.source == "#unseenet:unseenet.org" and cp.network == "matrix"
+    t = portal_topic("unseenet", GROUP_ID)
+    assert GROUP_ID in t and "late" in t and "unseenet.org" in t
+
+
+def test_new_thread_carries_its_subject():
+    import asyncio
+    from unseenet_gateway.matrix.exporter import MatrixSender
+    from unseenet.core.article import new_article
+
+    sent = {}
+
+    class FakeMatrix:
+        async def membership(self, rid):
+            return "join"
+
+        async def send(self, rid, content, txn):
+            sent[txn] = content["body"]
+            return "$x"
+
+    class FakeState:
+        def foreign_for(self, mid):
+            return None
+
+    async def rid(_):
+        return "!r:x"
+
+    s = MatrixSender(matrix=FakeMatrix(), state=FakeState(), rooms={GROUP_ID: "#r:x"},
+                     room_id_of=rid)
+    me = crypto.Identity.generate()
+    post = new_article(GROUP_ID, "Topic", "Body", from_name="Dora").finalize(me, 0)
+    chat = new_article(GROUP_ID, "", "Line", from_name="Dora",
+                       extra=[("Message-Kind", "chat")]).finalize(me, 0)
+    asyncio.run(s.send(post)), asyncio.run(s.send(chat))
+    bodies = list(sent.values())
+    assert bodies[0].split("\n")[0].endswith("on Unseenet: Topic")
+    assert bodies[1].split("\n")[0].endswith("on Unseenet:")

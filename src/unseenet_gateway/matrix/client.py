@@ -150,6 +150,15 @@ class Matrix:
         await self.call("POST", f"/rooms/{q(room_id)}/leave", body={"reason": reason} if reason else {})
         self._invited.pop(room_id, None)
 
+    async def create_room(self, body: dict) -> str:
+        return (await self.call("POST", "/createRoom", body=body))["room_id"]
+
+    async def put_state(self, room_id: str, event_type: str, content: dict,
+                        state_key: str = "") -> str:
+        r = await self.call("PUT", f"/rooms/{q(room_id)}/state/{q(event_type)}/{q(state_key)}",
+                            body=content)
+        return r.get("event_id", "")
+
     async def messages(self, room_id: str, *, start: str | None = None, limit: int = 100,
                        types: list[str] | None = None) -> dict:
         """One page of the room's timeline, newest first."""

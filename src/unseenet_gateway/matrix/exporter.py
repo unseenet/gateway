@@ -61,9 +61,14 @@ class MatrixSender:
             raise ExportError(f"not a member of {self.rooms[art.group]}")
         who = author_line(art)
         text = art.body.rstrip("\n")
+        head = f"{who}:"
+        subject = art.get("Subject", "").strip()
+        if (subject and art.get("Message-Kind", "post") != "chat"
+                and not art.get("References") and not subject.lower().startswith("re:")):
+            head = f"{who}: {subject}"           # a new thread: its subject says what it is about
         content: dict = {
             "msgtype": "m.text",
-            "body": f"{who}:\n{text}",
+            "body": f"{head}\n{text}",
             FROM_UNSEENET_KEY: art.message_id,
         }
         parent = await self._parent(rid, art)
