@@ -228,6 +228,8 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
         if owner.key_text != gw["group_owner"]:
             sys.exit("group_owner in the config does not match the group key")
 
+    seen: dict = {}                    # the Watcher's views, kept across rebuilds
+
     def build():
         ads = configured(cfg, desk)
         feeds = [f for ad in ads
@@ -236,6 +238,8 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
         watcher = Watcher(state=state, node=node, gateway=gateway,
                           groups=[c.group_id for ad in ads for c in ad.carried()],
                           joined=[c.group_id for ad in ads for c in ad.carried() if c.joined])
+        watcher.views.update({g: v for g, v in seen.items() if g in watcher.views})
+        seen.update(watcher.views)
         tasks: list = [watcher]
         tasks += [Importer(feed=f, state=state, node=node, gateway=gateway,
                            pow_bits=pow_bits, delay_for=watcher.delay) for f in feeds]

@@ -314,3 +314,15 @@ def test_markdown_goes_to_matrix_formatted_and_safe():
     assert sent["body"].endswith("Hej **verden**")
     assert sent["format"] == "org.matrix.custom.html"
     assert "<strong>verden</strong>" in sent["formatted_body"] and "Andreas" in sent["formatted_body"]
+
+
+def test_another_gateways_notice_is_never_imported():
+    import pytest
+    from unseenet_gateway.core.adapter import Skip
+    from unseenet_gateway.matrix.convert import GATEWAY_NOTICE_KEY, convert
+    ev = {"type": "m.room.message", "event_id": "$n", "sender": "@gw2:x", "origin_server_ts": 1,
+          "content": {"msgtype": "m.notice", "body": "This room is now gatewayed",
+                      GATEWAY_NOTICE_KEY: True}}
+    with pytest.raises(Skip):
+        convert(ev, group_id="matrix.x.r@aaaaaaaaaaaaaaaa", id_map=lambda e: None,
+                name_of=lambda u: None, gateway_user="@gw1:x")

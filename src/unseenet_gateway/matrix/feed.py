@@ -25,7 +25,7 @@ from unseenet.core.article import Article
 from ..core.adapter import Feed, Incoming, Retraction, Source
 from ..core.state import State
 from .client import Matrix, MatrixError
-from .convert import ENCRYPTED, MESSAGE, NETWORK, REDACTION, convert
+from .convert import ENCRYPTED, GATEWAY_NOTICE_KEY, MESSAGE, NETWORK, REDACTION, convert
 
 log = logging.getLogger(__name__)
 PAGE = 100
@@ -126,7 +126,8 @@ class MatrixFeed(Feed):
             self.state.set_cursor(NETWORK, rid, int(time.time() * 1000))
         if room in self.announce:
             try:
-                await self.matrix.send(rid, {"msgtype": "m.notice", "body": self.announce[room]},
+                await self.matrix.send(rid, {"msgtype": "m.notice", "body": self.announce[room],
+                                             GATEWAY_NOTICE_KEY: True},
                                        txn_id=f"unseenet-announce-{int(time.time())}")
             except MatrixError as exc:     # e.g. a room where only admins may write
                 log.warning("%s: could not post the notice that the room is gatewayed (%s); "

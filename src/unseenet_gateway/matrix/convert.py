@@ -22,6 +22,7 @@ NETWORK = "matrix"
 MESSAGE, REDACTION, ENCRYPTED = "m.room.message", "m.room.redaction", "m.room.encrypted"
 TEXT_TYPES = ("m.text", "m.notice", "m.emote")
 FROM_UNSEENET_KEY = "org.unseenet.message_id"   # set on events a gateway exported
+GATEWAY_NOTICE_KEY = "org.unseenet.gateway"     # on a gateway's own notices (UN-RFC 0037 6)
 MAX_FROM = 128
 
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -105,6 +106,7 @@ def is_from_unseenet(ev: dict, gateway_user: str | None = None) -> bool:
     content = ev.get("content") or {}
     new = content.get("m.new_content") or {}
     return (FROM_UNSEENET_KEY in content or FROM_UNSEENET_KEY in new
+            or GATEWAY_NOTICE_KEY in content          # another gateway's notice
             or (gateway_user is not None and ev.get("sender") == gateway_user))
 
 
