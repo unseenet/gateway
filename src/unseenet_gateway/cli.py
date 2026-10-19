@@ -92,7 +92,7 @@ def manifest_serial(state: State, ad: Adapter, group_id: str, bump: bool = False
     key = f"serial:{group_id}"
     base = int(ad.section.get("manifest_serial", 1))
     last = state.get_cursor("unseenet", key) or 0
-    serial = max(base, last + 1) if bump else max(base, last)
+    serial = max(base, last) + 1 if bump else max(base, last)   # bump: beyond what was out
     state.set_cursor("unseenet", key, serial)
     return serial
 
