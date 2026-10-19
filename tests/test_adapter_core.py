@@ -239,3 +239,15 @@ def test_nostr_portal_keeps_its_old_state(tmp_path):
                               counterpart=LoopCounterpart(state, network="matrix"),
                               group_id=PORTAL, pow_bits=0)
     assert state.get_cursor("unseenet", other.opened_key) is None
+
+
+def test_gateway_manifest_says_what_export_costs():
+    import json
+    from unseenet_gateway.core.unseenet_side import gateway_manifest
+    m = gateway_manifest(OWNER, GW, "loop.room", network="loop", source="room", direction="both",
+                         host="h", operator=OWNER.key_text, contact="c", min_pow=18, pow_bits=0)
+    assert json.loads(m.body)["min_pow"] == 18
+    m = gateway_manifest(OWNER, GW, "loop.room", network="loop", source="room",
+                         direction="import", host="h", operator=OWNER.key_text, contact="c",
+                         pow_bits=0)
+    assert json.loads(m.body)["min_pow"] == 0

@@ -81,6 +81,10 @@ async def cmd_create_groups(cfg: dict) -> None:
     node = Node(cfg["unseenet"]["node"], cfg["unseenet"].get("socks_port"))
     inbox = personal_inbox_id(gateway.public_key)
     inbox_done = False
+    if int(gw.get("pow_bits", 18)) < int(gw.get("export_min_pow", 20)) and any(
+            c.direction == "both" for ad in configured(cfg) for c in ad.carried()):
+        sys.exit("pow_bits is below export_min_pow: the manifest would ask more postage "
+                 "than the gateway pays for its own imports, and nodes would refuse them")
     for ad in configured(cfg):
         host = ad.host()
         for c in ad.carried():
@@ -94,6 +98,9 @@ async def cmd_create_groups(cfg: dict) -> None:
                 operator=gw["operator"], contact=gw["contact"], abuse=gw.get("abuse", ""),
                 policy=gw.get("policy", ""), title=c.title, description=c.description,
                 view=c.view, kinds=c.kinds,
+                # clients pay what the manifest says; for export that is the gateway's own
+                # minimum (0023 5.2), so say it here or every submission would be refused
+                min_pow=int(gw.get("export_min_pow", 20)) if c.direction == "both" else 0,
                 serial=int(ad.section.get("manifest_serial", 1)),
                 retention_days=int(ad.section.get("retention_days", 90)),
                 pow_bits=int(gw.get("pow_bits", 18)))
