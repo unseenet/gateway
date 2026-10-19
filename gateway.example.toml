@@ -39,3 +39,14 @@ groups = [
 # direction = "import"
 # start     = "new"             # or "all"
 # groups    = ["group-id"]
+
+# Optional: Matrix rooms (public, unencrypted) through one bot account.
+# The rooms' moderators must invite the account; it declines encrypted or
+# non-public rooms and stops when kicked. Run `matrix-login` once.
+# [matrix]
+# homeserver = "https://matrix.example.org"   # where the bot account lives
+# user       = "@unseenet-gateway:example.org"
+# prefix     = "matrix"          # `test.matrix` on test nodes
+# direction  = "import"          # or "both"
+# start      = "new"             # or "all" (at most max_pages * 100 messages back)
+# rooms      = ["#python:matrix.org", {room = "!roomid:example.org", name = "chosen.name"}]

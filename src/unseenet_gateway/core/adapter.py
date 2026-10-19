@@ -67,6 +67,8 @@ class Carried:
     direction: str       # "import" or "both"
     title: str
     description: str
+    view: str = ""               # UN-RFC 0008: "chat" for chat networks; "" = default
+    kinds: tuple[str, ...] = ()  # UN-RFC 0028 4.1: e.g. ("chat",); () = both
 
 
 @dataclass(frozen=True)

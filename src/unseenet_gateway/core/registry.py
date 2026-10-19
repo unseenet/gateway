@@ -17,6 +17,7 @@ GROUP = "unseenet_gateway.adapters"
 BUILTIN = {
     "usenet": "unseenet_gateway.usenet.adapter:UsenetAdapter",
     "nostr": "unseenet_gateway.nostr.adapter:NostrAdapter",
+    "matrix": "unseenet_gateway.matrix.adapter:MatrixAdapter",
 }
 
 

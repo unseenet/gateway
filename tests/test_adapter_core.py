@@ -115,7 +115,8 @@ def test_adapter_reads_its_own_section():
 
 def test_builtin_adapters_are_registered():
     known = adapters()
-    assert list(known)[:2] == ["usenet", "nostr"]
+    assert list(known)[:3] == ["usenet", "nostr", "matrix"]
+    assert known["matrix"].capabilities.export and "matrix-login" in known["matrix"].commands
     assert known["nostr"].capabilities.portals and "nostr-key" in known["nostr"].commands
     assert not known["usenet"].capabilities.export
 

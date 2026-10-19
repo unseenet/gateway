@@ -6,15 +6,16 @@ specified in [UN-RFC 0023](https://github.com/unseenet/unseenet/blob/main/rfc/un
 
 The gateway is a generic core with one **adapter** per network. The core does
 everything Unseenet's rules ask of every gateway; an adapter only reaches its
-network and converts messages. Two adapters come with it, and they are also
+network and converts messages. Three adapters come with it, and they are also
 the reference for writing new ones:
 
 | Adapter  | Network               | Hierarchy  | Profile     | Status in the lab               |
 |----------|-----------------------|------------|-------------|---------------------------------|
 | `usenet` | Usenet, through INN   | `usenet.*` | UN-RFC 0024 | import                          |
 | `nostr`  | Nostr groups (NIP-29) | `nostr.*`  | UN-RFC 0026 | import, export, portals         |
+| `matrix` | Matrix rooms          | `matrix.*` | UN-RFC 0037 (draft) | import, export          |
 
-Adapters for other networks – FidoNet, Matrix, IRC, XMPP, the fediverse and
+Adapters for other networks – FidoNet, IRC, XMPP, the fediverse and
 others whose names UN-RFC 0023 section 9 reserves – are meant to be easy to
 add, also by others and in their own repositories, without any change to
 this one. See [Writing an adapter](#writing-an-adapter).
@@ -45,6 +46,7 @@ src/unseenet_gateway/
              export queue, portals, keys, state, Origin-* headers, the Unseenet side
   usenet/    Usenet adapter: conversion, reading from INN
   nostr/     Nostr adapter: NIP-29 groups, BIP-340 signatures, export, portals
+  matrix/    Matrix adapter: public rooms through a bot account, export
 ```
 
 The core does what UN-RFC 0023 asks of every gateway; an adapter does only
@@ -67,8 +69,21 @@ Every imported article carries the shared `Origin-Network`, `Origin-ID`,
 client can show gatewayed articles from any network the same way. Headers that
 only make sense for one network keep its prefix (`Usenet-Newsgroups`, …).
 
-Planned networks: FidoNet (`fido.*`) and Matrix (`matrix.*`,
-unseenet/unseenet#116).
+**Matrix.** The adapter reads public, unencrypted Matrix rooms through one
+ordinary bot account, over the Client-Server API (no SDK needed). It joins a
+room only when the room's moderators invite it, and declines the invitation
+with a reason if the room is encrypted or not public; it stops reading a
+room as soon as it is kicked. Messages become chat lines in
+`matrix.<homeserver>.<alias>` (`#python:matrix.org` →
+`matrix.matrix-org.python`), with replies and threads as `References`, edits
+as new articles referring to the old one, and redactions as cancels. Images
+and files are left out. With `direction = "both"` the bot also writes
+submissions from Unseenet into the room, as replies where they answer
+something, naming the Unseenet author and key. The gateway never sends
+typing notifications, read receipts or presence. Virtual users per Unseenet
+key (an Application Service) and portals are later steps.
+
+Planned networks: FidoNet (`fido.*`).
 
 What a gateway never does: learn or record anything about who wrote an
 Unseenet post or where it came from. It can stop a key; it cannot identify a
@@ -90,6 +105,7 @@ unseenet-gateway -c gateway.toml import-once -v
 unseenet-gateway -c gateway.toml run             # every `interval` seconds
 unseenet-gateway -c gateway.toml stats
 unseenet-gateway -c gateway.toml -n nostr import-once -v   # one network only
+unseenet-gateway -c gateway.toml -n matrix matrix-login    # Matrix: save the bot's token
 ```
 
 Passphrases are read from `UNSEENET_GATEWAY_PASSPHRASE` (gateway key) and
@@ -99,11 +115,13 @@ needed again to change a group's manifest.
 
 ## Writing an adapter
 
-Usenet and Nostr are reference adapters, not the limit: an adapter for
+Usenet, Nostr and Matrix are reference adapters, not the limit: an adapter for
 another network can be written by anyone and live in its own package;
 nothing here has to change. Usenet shows a network reached through a local
 server and read by article number; Nostr shows one with several relays,
-signed messages, deletions, export and portals. The contract is in `src/unseenet_gateway/core/adapter.py`, and the
+signed messages, deletions, export and portals; Matrix one reached through
+an HTTP API with an account, where the other side's consent is an
+invitation. The contract is in `src/unseenet_gateway/core/adapter.py`, and the
 smallest complete example is the loopback adapter in
 `tests/test_adapter_core.py`. In short:
 
