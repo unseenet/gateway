@@ -25,12 +25,15 @@ import sys
 import tomllib
 from pathlib import Path
 
+from unseenet.core import crypto
 from unseenet.core.groups import personal_inbox_id
 
 from . import __version__
 from .core import keys
 from .core.adapter import Adapter
-from .core.desk import Desk
+from .core.cooperation import Watcher
+from .core.desk import JOIN, Desk
+from .core.directory import DEFAULT_DIRECTORY, Announcer
 from .core.importer import Importer
 from .core.portal import Portal
 from .core.registry import adapters
@@ -83,10 +86,25 @@ def make_desk(cfg: dict, state: State, node: Node, gateway) -> Desk | None:
                 contact=gw["contact"], pow_bits=int(gw.get("pow_bits", 18)))
 
 
-async def publish_manifest(cfg: dict, ad: Adapter, c, owner, gateway, node: Node) -> str:
+def manifest_serial(state: State, ad: Adapter, group_id: str, bump: bool = False) -> int:
+    """The serial for a group's next manifest: the configured one, or one more than the
+    last this gateway published when it changes the manifest itself (a new peer)."""
+    key = f"serial:{group_id}"
+    base = int(ad.section.get("manifest_serial", 1))
+    last = state.get_cursor("unseenet", key) or 0
+    serial = max(base, last + 1) if bump else max(base, last)
+    state.set_cursor("unseenet", key, serial)
+    return serial
+
+
+async def publish_manifest(cfg: dict, ad: Adapter, c, owner, gateway, node: Node,
+                           state: State | None = None, bump: bool = False) -> str:
     """Publish one gatewayed group's manifest (and the submissions inbox if it exports)."""
     gw = cfg["gateway"]
     inbox = personal_inbox_id(gateway.public_key)
+    peers = [k for k, _ in ad.desk.peers(c.group_id)] if ad.desk is not None else []
+    serial = (manifest_serial(state, ad, c.group_id, bump) if state is not None
+              else int(ad.section.get("manifest_serial", 1)))
     if c.direction == "both":
         await node.post(inbox_manifest(gateway))
     art = gateway_manifest(
@@ -99,7 +117,8 @@ async def publish_manifest(cfg: dict, ad: Adapter, c, owner, gateway, node: Node
         # clients pay what the manifest says; for export that is the gateway's own
         # minimum (0023 5.2), so say it here or every submission would be refused
         min_pow=int(gw.get("export_min_pow", 20)) if c.direction == "both" else 0,
-        serial=int(ad.section.get("manifest_serial", 1)),
+        peers=peers, requests=inbox,
+        serial=serial,
         retention_days=int(ad.section.get("retention_days", 90)),
         pow_bits=int(gw.get("pow_bits", 18)))
     return await node.post(art)
@@ -132,7 +151,11 @@ async def cmd_create_groups(cfg: dict) -> None:
                  "than the gateway pays for its own imports, and nodes would refuse them")
     for ad in ads:
         for c in ad.carried():
-            print(f"{await publish_manifest(cfg, ad, c, owner, gateway, node):9} {c.group_id}")
+            if c.joined:
+                print(f"{'joined':9} {c.group_id} (owned by another gateway)")
+                continue
+            print(f"{await publish_manifest(cfg, ad, c, owner, gateway, node, state):9} "
+                  f"{c.group_id}")
     await node.close()
 
 
@@ -183,6 +206,8 @@ def make_exporter(cfg: dict, ads: list[Adapter], gateway, state: State, node: No
 
 
 async def _close(task) -> None:
+    if isinstance(task, Watcher):
+        return
     try:
         await (task.feed.close() if isinstance(task, Importer) else task.close())
     except Exception:  # noqa: BLE001
@@ -207,10 +232,21 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
         ads = configured(cfg, desk)
         feeds = [f for ad in ads
                  for f in ad.feeds(state=state, node=node, gateway=gateway, pow_bits=pow_bits)]
-        tasks: list = [Importer(feed=f, state=state, node=node, gateway=gateway,
-                                pow_bits=pow_bits) for f in feeds]
+        # UN-RFC 0038: read the groups served, so several gateways can share them
+        watcher = Watcher(state=state, node=node, gateway=gateway,
+                          groups=[c.group_id for ad in ads for c in ad.carried()],
+                          joined=[c.group_id for ad in ads for c in ad.carried() if c.joined])
+        tasks: list = [watcher]
+        tasks += [Importer(feed=f, state=state, node=node, gateway=gateway,
+                           pow_bits=pow_bits, delay_for=watcher.delay) for f in feeds]
         tasks += make_portals(cfg, gateway, state, node, feeds)
-        return ads, feeds, tasks, make_exporter(cfg, ads, gateway, state, node, feeds)
+        if gw.get("directory", DEFAULT_DIRECTORY):       # "" turns announcing off
+            tasks.append(Announcer(cfg=cfg, ads=ads, state=state, node=node, gateway=gateway,
+                                   pow_bits=pow_bits))
+        exporter = make_exporter(cfg, ads, gateway, state, node, feeds)
+        if exporter is not None:
+            exporter.watcher = watcher
+        return ads, feeds, tasks, exporter
 
     ads, feeds, tasks, exporter = build()
     while True:
@@ -230,7 +266,8 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
                 await node.close()
         if desk is not None:
             try:
-                if await desk_pass(cfg, desk, ads, feeds, owner, gateway, node):
+                if await desk_pass(cfg, desk, ads, feeds, owner, gateway, node, state,
+                                   tasks[0]):
                     for task in tasks:
                         await _close(task)
                     ads, feeds, tasks, exporter = build()     # carry what was approved
@@ -246,27 +283,95 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
 
 
 async def desk_pass(cfg: dict, desk: Desk, ads: list[Adapter], feeds: list, owner, gateway,
-                    node: Node) -> bool:
-    """New requests to the operator, and their answers. True if something new is to be
-    carried now (approved, and its group published here)."""
+                    node: Node, state: State, watcher: Watcher) -> bool:
+    """New requests to the operator, their answers, and gateways joining one another's
+    groups (UN-RFC 0038 3.2). True if what is carried changed, so the CLI rebuilds."""
     for ad in ads:
         await ad.handle_requests(desk, feeds)
+    await ask_to_join(desk, ads, watcher)
     rebuild = False
-    for req in await desk.poll():
+    decided = await desk.poll()
+    for jr in desk.joins:                         # another gateway asks to serve ours too
+        await consider_join(cfg, desk, ads, feeds, jr)
+    for req in decided:
         if req.status != "approved":
             continue                       # the adapter declines on the other side next pass
+        if req.network == JOIN:
+            rebuild |= await admit_peer(cfg, desk, ads, owner, gateway, node, state, req)
+            continue
         ad = next((a for a in ads if a.network == req.network), None)
         c = next((c for c in ad.carried() if c.source == req.source), None) if ad else None
         if c is None:
+            continue
+        if c.joined:
+            rebuild = True                         # serve another gateway's group: ask to join
             continue
         if owner is None:
             log.warning("%s %s approved: run create-groups to publish %s (or set "
                         "gateway.auto_create)", req.network, req.source, c.name)
             continue
         log.info("approved %s %s: %s %s", req.network, req.source, c.name,
-                 await publish_manifest(cfg, ad, c, owner, gateway, node))
+                 await publish_manifest(cfg, ad, c, owner, gateway, node, state))
         rebuild = True
     return rebuild
+
+
+async def ask_to_join(desk: Desk, ads: list[Adapter], watcher: Watcher) -> None:
+    """For groups this gateway helps serve but is not yet a gateway of: ask their owner."""
+    for ad in ads:
+        for c in ad.carried():
+            view = watcher.views.get(c.group_id)
+            if not c.joined or view is None or view.manifest is None \
+                    or watcher.admitted(c.group_id):
+                continue
+            gw_obj = view.manifest.raw.get("gateway") or {}
+            to = gw_obj.get("requests") or view.manifest.raw.get("submissions")
+            key = next((k for k in view.gateways if to and to.endswith("@" + crypto.fingerprint(k))),
+                       None)
+            if not to or key is None:
+                log.warning("%s: its manifest says nowhere to ask to join", c.group_id)
+                continue
+            await desk.request_join(group=c.group_id, to_inbox=to, to_key=key,
+                                    network=ad.network, source=c.source, account=ad.host())
+
+
+async def consider_join(cfg: dict, desk: Desk, ads: list[Adapter], feeds: list, jr) -> None:
+    """A join request for a group this gateway publishes: ask the operator (once)."""
+    owner_fp = cfg["gateway"].get("group_owner", "")
+    ad = next((a for a in ads if a.network == jr.network), None)
+    c = next((c for c in ad.carried() if c.group_id == jr.group), None) if ad else None
+    if c is None or c.joined or not owner_fp.startswith("ed25519:") \
+            or jr.group.rpartition("@")[2] != crypto.fingerprint(crypto.key_from_text(owner_fp)):
+        log.info("join request for %s from %s: not a group this gateway publishes",
+                 jr.group, jr.sender[:20])
+        return
+    member = await ad.is_member(feeds, c.source, jr.account)
+    seen = {None: "cannot be checked", True: "yes", False: "NO - it has not been invited"}[member]
+    detail = (f"Another gateway asks to help serve {jr.group}.\n"
+              f"Gateway key: {jr.sender}\nIts {jr.network} account: {jr.account}\n"
+              f"In {c.source}: {seen}\nIts operator: {jr.operator}\nContact: {jr.contact}\n\n"
+              "If approved, it is added to the group's gateways in a new manifest; the "
+              "gateways then take turns (UN-RFC 0038).")
+    await desk.ask(JOIN, f"{jr.group}|{jr.sender}", title=f"{jr.group} (another gateway)",
+                   detail=detail, name=jr.account)
+
+
+async def admit_peer(cfg: dict, desk: Desk, ads: list[Adapter], owner, gateway, node: Node,
+                     state: State, req) -> bool:
+    group, _, key = req.source.partition("|")
+    if owner is None:
+        log.warning("gateway %s approved for %s: needs gateway.auto_create to publish the "
+                    "new manifest here", key[:20], group)
+        return False
+    for ad in ads:
+        c = next((c for c in ad.carried() if c.group_id == group and not c.joined), None)
+        if c is None:
+            continue
+        desk.add_peer(group, key, req.name or "")
+        log.info("admitted %s to %s: %s", key[:20], group,
+                 await publish_manifest(cfg, ad, c, owner, gateway, node, state, bump=True))
+        return True
+    return False
 
 
 def main() -> None:

@@ -67,10 +67,28 @@ class MatrixSender:
                     return ev
         return None
 
+    async def already_there(self, rid: str, message_id: str, pages: int = 3) -> str | None:
+        """The event id if the room already has this article, sent by any gateway
+        (UN-RFC 0038 section 5): another gateway's turn came first."""
+        token = None
+        for _ in range(pages):
+            page = await self.matrix.messages(rid, start=token, limit=100, types=["m.room.message"])
+            for ev in page.get("chunk", []):
+                if (ev.get("content") or {}).get(FROM_UNSEENET_KEY) == message_id:
+                    return ev.get("event_id")
+            token = page.get("end")
+            if not token or not page.get("chunk"):
+                break
+        return None
+
     async def send(self, art: Article) -> str:
         rid = await self.room_id_of(self.rooms[art.group])
         if await self.matrix.membership(rid) != "join":
             raise ExportError(f"not a member of {self.rooms[art.group]}")
+        there = await self.already_there(rid, art.message_id)
+        if there:
+            log.info("%s is already in %s as %s", art.message_id, self.rooms[art.group], there)
+            return there
         who = author_line(art)
         text = art.body.rstrip("\n")
         head = f"{who}:"

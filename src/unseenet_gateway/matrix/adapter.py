@@ -95,6 +95,16 @@ class MatrixAdapter(Adapter):
                         for r in self.desk.approved(self.network) if r.source not in configured]
         for r in entries:
             room, wanted = (r["room"], r.get("name")) if isinstance(r, dict) else (r, None)
+            # join another gateway's group instead of making one (UN-RFC 0038 3.2):
+            # rooms = [{room = "#x:y", group = "matrix.y.x@<fingerprint>"}], or approved so
+            joined = (r.get("group") or (r.get("full_name") if "@" in (r.get("full_name") or "")
+                                          else None)) if isinstance(r, dict) else None
+            if joined:
+                out.append((room, Carried(
+                    source=room, name=joined.partition("@")[0], group_id=joined,
+                    direction=self.direction(), title=f"Matrix: {room}", description="",
+                    view="chat", kinds=("chat",), joined=True)))
+                continue
             if isinstance(r, dict) and r.get("full_name"):
                 name = r["full_name"]
             else:
@@ -153,6 +163,19 @@ class MatrixAdapter(Adapter):
         return MatrixCounterpart(state=state, matrix=matrix, alias=entry["room"],
                                  group_id=entry["group"], admins=entry.get("admins", []),
                                  max_pages=int(self.section.get("max_pages", 10)))
+
+    async def is_member(self, feeds: list[Feed], source: str, account: str) -> bool | None:
+        """Whether ``account`` is in the room (joined or invited): the room's consent to
+        another gateway (UN-RFC 0038 3.2). None if it cannot be told."""
+        feed = next((f for f in feeds if isinstance(f, MatrixFeed)), None)
+        if feed is None:
+            return None
+        try:
+            rid = await feed.room_id(source)
+            m = await feed.matrix.state(rid, "m.room.member", account) or {}
+        except Exception:  # noqa: BLE001
+            return None
+        return m.get("membership") in ("join", "invite")
 
     async def handle_requests(self, desk, feeds: list[Feed]) -> None:
         """Invitations from rooms this gateway does not carry (gateway#10).

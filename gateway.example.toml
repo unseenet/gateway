@@ -20,6 +20,11 @@ policy   = "Text only. Cleanfeed on the INN side. No logs beyond the Message-ID 
 # requests  = true       # false: ignore invitations from rooms not configured
 # auto_create = false    # true: publish the group at once on approval (group key on this host)
 
+# Gateway directory (UN-RFC 0038 section 6): who this gateway is and what to invite,
+# announced weekly and when it changes. "" turns it off.
+# name      = "Example gateway"
+# directory = "unseenet.gateways@ph5fc5hop5232qsz"
+
 pow_bits = 18      # postage paid per imported article (the node's minimum)
 interval = 60      # seconds between passes in `run`
 

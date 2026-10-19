@@ -225,6 +225,9 @@ def test_new_thread_carries_its_subject():
         async def membership(self, rid):
             return "join"
 
+        async def messages(self, rid, **kw):
+            return {"chunk": []}
+
         async def send(self, rid, content, txn):
             sent[txn] = content["body"]
             return "$x"
@@ -287,6 +290,9 @@ def test_markdown_goes_to_matrix_formatted_and_safe():
     class FakeMatrix:
         async def membership(self, rid):
             return "join"
+
+        async def messages(self, rid, **kw):
+            return {"chunk": []}
 
         async def send(self, rid, content, txn):
             sent.update(content)

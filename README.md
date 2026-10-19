@@ -135,6 +135,31 @@ gateway host) and joins the room within a pass; otherwise approval only marks
 it, and the operator runs `create-groups`. Spaces, private and encrypted rooms
 are declined without asking. Each room is asked about once.
 
+## Several gateways for one group
+
+A gatewayed group can have several gateways (UN-RFC 0038), so it does not
+depend on one host. They share the work by turns: each takes a rank from its
+key, the first imports and exports at once, the next fills in what is still
+missing after `stagger` seconds (300 unless the manifest says otherwise), and
+so on. Nothing is sent twice: a gateway skips messages another has imported
+and submissions another has exported. If a gateway stops, the others go on.
+
+People decide who takes part. To help serve a group another gateway runs:
+
+1. The room invites this gateway's account too.
+2. The operator approves the request with the group's full Group ID instead of
+   a name (`approve matrix.matrix-org.room@<fingerprint>`), or configures the
+   room with `rooms = [{room = "#room:server", group = "<Group ID>"}]`.
+3. This gateway sends a join request to the owning gateway, whose operator gets
+   it in their inbox, with whether the new account is in the room.
+   `approve` there publishes a new manifest with both gateways
+   (the owner needs `auto_create`).
+
+Until the manifest lists it, the joining gateway writes nothing in the group.
+Every gateway announces itself in the directory `unseenet.gateways` (name,
+operator, accounts to invite, groups served); a group stays active while one of
+its gateways announces it.
+
 ## Writing an adapter
 
 Usenet, Nostr and Matrix are reference adapters, not the limit: an adapter for

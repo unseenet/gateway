@@ -22,6 +22,7 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
                      title: str = "", description: str = "", serial: int = 1,
                      retention_days: int = 90, submissions: str | None = None,
                      view: str = "", kinds: tuple[str, ...] = (), min_pow: int = 0,
+                     peers: list[str] | None = None, requests: str | None = None,
                      pow_bits: int = 18) -> Article:
     """Manifest of a gatewayed group (UN-RFC 0023 section 3.2): moderated, gateway key as moderator."""
     if direction not in ("import", "both"):
@@ -30,12 +31,17 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
           "host": host, "operator": operator, "contact": contact}
     if abuse:
         gw["abuse"] = abuse
+    if requests:
+        gw["requests"] = requests            # UN-RFC 0038 3.2: where join requests go
     if policy:
         gw["policy"] = policy[:2048]
     data = {"v": 1, "name": name, "type": "moderated", "owner": owner.key_text,
             "serial": serial, "min_pow": min_pow, "retention_days": retention_days,
-            "moderators": [gateway.key_text], "gateway": gw}
-    if submissions:
+            "moderators": [gateway.key_text] + [k for k in (peers or [])
+                                                 if k != gateway.key_text],
+            "gateway": gw}
+    if submissions and not peers:
+        # with several gateways, clients send submissions to each one's inbox (0038 3.1)
         data["submissions"] = submissions
     if title:
         data["title"] = title[:128]

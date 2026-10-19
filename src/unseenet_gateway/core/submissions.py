@@ -39,6 +39,7 @@ class ExportStats:
     exported: int = 0
     refused: int = 0
     failed: int = 0
+    waiting: int = 0
 
 
 def inbox_manifest(gateway: crypto.Identity, pow_bits: int = 18) -> Article:
@@ -52,11 +53,12 @@ class Exporter:
 
     def __init__(self, *, state: State, node: Node, gateway: crypto.Identity,
                  targets: dict, min_pow: int = 20, per_key_per_hour: int = 10,
-                 delay_max: float = 600.0):
+                 delay_max: float = 600.0, watcher=None):
         self.state, self.node, self.gateway = state, node, gateway
         self.targets = targets
         self.min_pow, self.per_key_per_hour = min_pow, per_key_per_hour
         self.delay_max = delay_max
+        self.watcher = watcher          # core/cooperation.py, when other gateways may share
         self.inbox = personal_inbox_id(gateway.public_key)
         self.state.db.execute("CREATE TABLE IF NOT EXISTS exports ("
                               "author TEXT NOT NULL, at INTEGER NOT NULL)")
@@ -111,23 +113,54 @@ class Exporter:
             raise Refused("rate limit for this key")
         return net
 
+    def _due(self, mid: str, group: str, now: float) -> float:
+        """When a submission may go out: the random delay of UN-RFC 0023 5.2, drawn once
+        and kept in the state, plus this gateway's turn (UN-RFC 0038 section 5)."""
+        key = f"export-due:{mid}"
+        due = self.state.get_cursor("unseenet", key)
+        if due is None:
+            due = int(now + random.uniform(0, self.delay_max))
+            self.state.set_cursor("unseenet", key, due)
+        turn = self.watcher.delay(group) if self.watcher else 0.0
+        return float(due) + (turn or 0.0)
+
+    def _done(self, n_mid: str) -> None:
+        self.state.db.execute("DELETE FROM cursor WHERE network='unseenet' AND source=?",
+                              (f"export-due:{n_mid}",))
+        self.state.db.commit()
+
     async def run(self) -> ExportStats:
         st = ExportStats()
+        now = time.time()
+        first_waiting = None
+        last = self.state.get_cursor("unseenet", self.inbox)
         for n, art in await self._submissions():
+            last = n
+            if self.state.foreign_for(art.message_id):
+                continue                                 # sent already (read again while waiting)
             try:
                 net = self._check(art)
             except Refused as r:
                 st.refused += 1
                 log.info("submission %s refused: %s", art.message_id, r)
-                self.state.set_cursor("unseenet", self.inbox, n)
+                self._done(art.message_id)
                 continue
-            await asyncio.sleep(random.uniform(0, self.delay_max))      # 0023 section 5.2
+            if self.watcher is not None and self.watcher.delay(art.group) is None:
+                continue                                 # not (yet) a gateway of the group
+            if now < self._due(art.message_id, art.group, now):
+                st.waiting += 1
+                first_waiting = n if first_waiting is None else min(first_waiting, n)
+                continue
+            if self.watcher is not None and self.watcher.approved_elsewhere(art.message_id):
+                log.info("submission %s already sent by another gateway", art.message_id)
+                self._done(art.message_id)
+                continue
             try:
                 foreign_id = await self.targets[art.group][1](art)
             except Exception as exc:  # noqa: BLE001  (refused by the other network)
                 st.failed += 1
                 log.warning("%s refused %s: %s", net, art.message_id, exc)
-                self.state.set_cursor("unseenet", self.inbox, n)
+                self._done(art.message_id)
                 continue
             approve(art, self.gateway)                   # only after the other side accepted
             try:
@@ -137,7 +170,11 @@ class Exporter:
             self.state.remember(net, foreign_id, art.message_id, art.group, "out")
             self.state.db.execute("INSERT INTO exports VALUES (?,?)",
                                   (art["Author-Key"], int(time.time())))
-            self.state.set_cursor("unseenet", self.inbox, n)
+            self._done(art.message_id)
             st.exported += 1
             log.info("exported %s to %s as %s", art.message_id, net, foreign_id)
+        if last is not None:
+            # never move past a submission still waiting for its time (UN-RFC 0038 5)
+            self.state.set_cursor("unseenet", self.inbox,
+                                  last if first_waiting is None else first_waiting - 1)
         return st
