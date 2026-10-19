@@ -204,7 +204,9 @@ class MatrixFeed(Feed):
         newest = since or 0
         for ev in msgs:
             newest = max(newest, ev.get("origin_server_ts", 0))
-            yield Incoming(ev.get("event_id"), ev, label=ev.get("event_id", "")[:20])
+            ts = ev.get("origin_server_ts")
+            yield Incoming(ev.get("event_id"), ev, label=ev.get("event_id", "")[:20],
+                           when=ts / 1000 if isinstance(ts, int) else None)
         if newest:
             self.state.set_cursor(NETWORK, rid, newest)
 
@@ -214,6 +216,16 @@ class MatrixFeed(Feed):
                        id_map=lambda eid: self.state.lookup(NETWORK, eid),
                        name_of=lambda uid: self.names.get((rid, uid)),
                        gateway_user=self.matrix.user_id)
+
+    def hold(self, source: Source, when: float) -> None:
+        """Messages from ``when`` on wait for this gateway's turn: read them again."""
+        rid = self.room_ids.get(source.foreign)
+        if rid is None:
+            return
+        held = int(when * 1000) - 1
+        cur = self.state.get_cursor(NETWORK, rid)
+        if cur is None or held < cur:
+            self.state.set_cursor(NETWORK, rid, held)
 
     def imported(self, item: Incoming, art: Article) -> None:
         self.state.remember_author(NETWORK, item.foreign_id, item.payload.get("sender", ""))

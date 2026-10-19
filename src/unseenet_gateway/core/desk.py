@@ -35,6 +35,12 @@ from .unseenet_side import Node
 
 log = logging.getLogger(__name__)
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS peers (
+    group_id TEXT NOT NULL,
+    key      TEXT NOT NULL,          -- another gateway admitted to the group (UN-RFC 0038 3.2)
+    account  TEXT,
+    PRIMARY KEY (group_id, key)
+);
 CREATE TABLE IF NOT EXISTS desk (
     network  TEXT NOT NULL,
     source   TEXT NOT NULL,
@@ -48,6 +54,22 @@ CREATE TABLE IF NOT EXISTS desk (
 );
 """
 _NAME = re.compile(r"^[a-z0-9][a-z0-9+_-]*(\.[a-z0-9][a-z0-9+_-]*)*$")
+_GID = re.compile(r"^[a-z0-9][a-z0-9+_-]*(\.[a-z0-9][a-z0-9+_-]*)*@[a-z2-7]{16}$")   # join one
+
+
+JOIN = "join"                      # the desk's "network" for join requests from gateways
+
+
+@dataclass
+class JoinRequest:
+    """A signed request from another gateway to serve one of our groups too."""
+    sender: str                      # its gateway key
+    group: str
+    network: str
+    source: str
+    account: str
+    operator: str
+    contact: str
 
 
 @dataclass
@@ -58,6 +80,18 @@ class Request:
     name: str | None
     request: str | None
     reason: str | None
+
+
+def parse_join(body: str, sender: str) -> JoinRequest | None:
+    import json
+    try:
+        d = json.loads(body)
+        req = JoinRequest(sender=sender, group=str(d["group"]), network=str(d["network"]),
+                          source=str(d["source"]), account=str(d.get("account", "")),
+                          operator=str(d.get("operator", "")), contact=str(d.get("contact", "")))
+    except (ValueError, KeyError, TypeError):
+        return None
+    return req if "@" in req.group else None
 
 
 def parse_answer(body: str) -> tuple[str, str] | None:
@@ -86,6 +120,7 @@ class Desk:
         self.contact, self.pow_bits = contact, pow_bits
         self.inbox = personal_inbox_id(gateway.public_key)
         self.cursor_key = f"desk:{self.inbox}"
+        self.joins: list[JoinRequest] = []
         self.state.db.executescript(SCHEMA)
 
     # --- what is known ---
@@ -100,6 +135,15 @@ class Desk:
             "SELECT network, source, status, name, request, reason FROM desk "
             "WHERE network=? AND status='approved'", (network,)).fetchall()
         return [Request(*r) for r in rows]
+
+    def peers(self, group_id: str) -> list[tuple[str, str]]:
+        return [tuple(r) for r in self.state.db.execute(
+            "SELECT key, account FROM peers WHERE group_id=? ORDER BY key", (group_id,))]
+
+    def add_peer(self, group_id: str, key: str, account: str) -> None:
+        self.state.db.execute("INSERT OR REPLACE INTO peers VALUES (?,?,?)",
+                              (group_id, key, account))
+        self.state.db.commit()
 
     def _set(self, network: str, source: str, **fields) -> None:
         cols = ", ".join(f"{k}=?" for k in fields)
@@ -117,14 +161,22 @@ class Desk:
             log.warning("request for %s %s not sent: gateway.operator and gateway.contact "
                         "must be a key and its personal inbox", network, source)
             return False
-        proposed = name or "(none: give one, e.g. 'approve matrix.example.room')"
-        body = (f"{detail}\n\n"
-                f"Proposed Unseenet group: {proposed}\n\n"
-                "Answer this post with one line:\n"
-                "  approve              - gateway it under the proposed name\n"
-                "  approve <name>       - gateway it under another name\n"
-                "  decline <reason>     - do not gateway it; the reason is shown to them\n\n"
-                "Only answers signed by the operator key in gateway.toml count.")
+        if network == JOIN:
+            body = (f"{detail}\n\n"
+                    "Answer this post with one line:\n"
+                    "  approve              - let it serve the group too\n"
+                    "  decline <reason>     - do not\n\n"
+                    "Only answers signed by the operator key in gateway.toml count.")
+        else:
+            proposed = name or "(none: give one, e.g. 'approve matrix.example.room')"
+            body = (f"{detail}\n\n"
+                    f"Proposed Unseenet group: {proposed}\n"
+                    "(or a Group ID, name@fingerprint, to join a group another gateway runs)\n\n"
+                    "Answer this post with one line:\n"
+                    "  approve              - gateway it under the proposed name\n"
+                    "  approve <name>       - gateway it under another name, or join <name@fp>\n"
+                    "  decline <reason>     - do not gateway it; the reason is shown to them\n\n"
+                    "Only answers signed by the operator key in gateway.toml count.")
         art = inbox_article(self.contact, self.operator, from_name="Unseenet gateway",
                             subject=f"Gateway request: {title}", body=body,
                             sender=self.gateway, reply_inbox=self.inbox,
@@ -135,6 +187,26 @@ class Desk:
                                int(time.time())))
         self.state.db.commit()
         log.info("asked the operator about %s %s (%s)", network, source, art.message_id)
+        return True
+
+    async def request_join(self, *, group: str, to_inbox: str, to_key: bytes, network: str,
+                           source: str, account: str) -> bool:
+        """Ask the gateway that owns ``group`` to admit this one (UN-RFC 0038 3.2); once."""
+        flag = f"join-sent:{group}"
+        if self.state.get_cursor("unseenet", flag) is not None:
+            return False
+        import json
+        body = json.dumps({"group": group, "network": network, "source": source,
+                           "account": account, "operator": self.operator_text,
+                           "contact": self.contact}, sort_keys=True)
+        art = inbox_article(to_inbox, to_key, from_name="Unseenet gateway",
+                            subject=f"Join request: {group}", body=body + "\n",
+                            sender=self.gateway, reply_inbox=self.inbox,
+                            content_type="application/json", pow_bits=self.pow_bits,
+                            extra=[("Gateway-Request", JOIN)])
+        await self.node.post(art)
+        self.state.set_cursor("unseenet", flag, int(time.time()))
+        log.info("asked %s to let this gateway serve %s too", to_inbox, group)
         return True
 
     # --- answers ---
@@ -149,17 +221,23 @@ class Desk:
         pending = {r[0]: (r[1], r[2]) for r in self.state.db.execute(
             "SELECT request, network, source FROM desk WHERE status='pending'")}
         decided = []
+        self.joins: list[JoinRequest] = []
         for n in range(max(after + 1, low), high + 1):
             raw = await c.article(str(n))
             self.state.set_cursor("unseenet", self.cursor_key, n)
-            if raw is None or not pending:
+            if raw is None:
                 continue
             try:
                 outer = Article.from_bytes(strip_reader_headers(raw))
                 inner, sender = open_inbox_article(outer, self.gateway)
             except (ArticleError, ValueError):
                 continue
-            if sender is None or sender != self.operator:
+            if sender is not None and inner.get("Gateway-Request", "").strip() == JOIN:
+                req = parse_join(inner.body, crypto.key_to_text(sender))
+                if req is not None:
+                    self.joins.append(req)
+                continue
+            if sender is None or sender != self.operator or not pending:
                 continue                           # only the operator decides
             refs = outer.get("References", "").split() + inner.get("References", "").split()
             hit = next((pending[m] for m in refs if m in pending), None)
@@ -172,9 +250,11 @@ class Desk:
             network, source = hit
             verdict, arg = answer
             req = self.get(network, source)
-            if verdict == "approve":
+            if verdict == "approve" and network == JOIN:
+                self._set(network, source, status="approved", reason=None)
+            elif verdict == "approve":
                 name = arg.lower() if arg else req.name
-                if not name or not _NAME.match(name) or len(name.encode()) > 128:
+                if not name or not (_NAME.match(name) or _GID.match(name)) or len(name.encode()) > 150:
                     log.warning("approval of %s %s has no valid group name (%r)", network,
                                 source, arg)
                     continue

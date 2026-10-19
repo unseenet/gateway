@@ -9,6 +9,7 @@ imported messages the other network has since removed (section 4.5).
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, fields
 from datetime import datetime
 
@@ -30,6 +31,7 @@ class RunStats:
     skipped: int = 0
     refused: int = 0
     cancelled: int = 0
+    waiting: int = 0
 
     def add(self, other: "RunStats") -> None:
         for f in fields(self):
@@ -45,9 +47,12 @@ def cancel_article(group_id: str, target_mid: str, reason: str, *,
 
 class Importer:
     def __init__(self, *, feed: Feed, state: State, node: Node, gateway: crypto.Identity,
-                 pow_bits: int):
+                 pow_bits: int, delay_for=None):
         self.feed, self.state, self.node = feed, state, node
         self.gateway, self.pow_bits = gateway, pow_bits
+        # group id -> seconds to wait before importing (rank x stagger), or None when this
+        # gateway may not write there (UN-RFC 0038); None for the whole callable: no waiting
+        self.delay_for = delay_for
 
     @property
     def label(self) -> str:
@@ -61,9 +66,15 @@ class Importer:
 
     async def run_source(self, source: Source) -> RunStats:
         st, net = RunStats(), self.feed.network
+        delay = self.delay_for(source.group_id) if self.delay_for else 0.0
+        now, hold_from = time.time(), None
         async for item in self.feed.fetch(source):
             if item.foreign_id and self.state.lookup(net, item.foreign_id):
-                st.duplicate += 1                    # before paying postage
+                st.duplicate += 1                    # before paying postage (or a peer's)
+                continue
+            if delay is None or (delay and item.when and now < item.when + delay):
+                st.waiting += 1                      # not this gateway's turn (yet)
+                hold_from = item.when if hold_from is None else min(hold_from, item.when or now)
                 continue
             try:
                 art = self.feed.convert(source, item)
@@ -87,6 +98,8 @@ class Importer:
             else:
                 st.imported += 1
                 log.info("imported %s -> %s %s", item.foreign_id, art.message_id, art.group)
+        if hold_from is not None:
+            self.feed.hold(source, hold_from)
         for r in await self.feed.retractions(source):
             key = f"cancel:{r.foreign_id}"
             if self.state.lookup(net, key):

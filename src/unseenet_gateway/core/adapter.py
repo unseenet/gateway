@@ -78,6 +78,7 @@ class Carried:
     description: str
     view: str = ""               # UN-RFC 0008: "chat" for chat networks; "" = default
     kinds: tuple[str, ...] = ()  # UN-RFC 0028 4.1: e.g. ("chat",); () = both
+    joined: bool = False         # a group owned by another gateway that this one helps serve
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class Incoming:
     foreign_id: str | None
     payload: Any
     label: str = ""          # for the log, e.g. an article number
+    when: float | None = None   # the other network's time of the message (epoch seconds)
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,11 @@ class Feed:
 
     def imported(self, item: Incoming, art: Article) -> None:
         """Called after ``item`` was posted to Unseenet as ``art``."""
+
+    def hold(self, source: Source, when: float) -> None:
+        """Read again from ``when`` (epoch seconds) on the next pass: messages from then
+        on were left for later (UN-RFC 0038 section 4). A feed that cannot does nothing,
+        and then its messages are imported without waiting their turn."""
 
     async def retractions(self, source: Source) -> list[Retraction]:
         """Imported messages to cancel after this pass over ``source``."""
@@ -199,6 +206,11 @@ class Adapter:
     def counterpart(self, entry: dict, *, state, feeds: list[Feed]) -> Counterpart:
         """The counterpart for one [[portals]] entry of this network."""
         raise NotImplementedError
+
+    async def is_member(self, feeds: list[Feed], source: str, account: str) -> bool | None:
+        """Whether another gateway's ``account`` takes part in ``source`` (its consent
+        there, UN-RFC 0038 3.2); None if this network cannot tell."""
+        return None
 
     async def handle_requests(self, desk, feeds: list[Feed]) -> None:
         """Turn requests from the other network into questions to the operator, and
