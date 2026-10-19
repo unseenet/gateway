@@ -154,7 +154,8 @@ class PortalNode(FakeNode):
 class LoopCounterpart(Counterpart):
     network, source = "loop", "room"
 
-    def __init__(self, state):
+    def __init__(self, state, network="loop", source="room"):
+        self.network, self.source = network, source
         self.feed = LoopFeed(state, [])
         self.sent = []
 
@@ -193,4 +194,48 @@ def test_portal_delay_survives_one_off_passes(tmp_path, monkeypatch):
     assert st.exported == 1 and cp.sent == [post.message_id]
     st, cp = one_pass()
     assert st.exported == 0 and st.waiting == 0
-    assert state.get_cursor("unseenet", f"portal-due:{PORTAL}:{post.message_id}") is None
+    assert state.get_cursor("unseenet", f"portal-due:{PORTAL}|loop|room:{post.message_id}") is None
+
+
+def test_two_portals_of_one_group_are_kept_apart(tmp_path, monkeypatch):
+    """A portal opened later neither blocks nor inherits an earlier one."""
+    entry = lambda net: {"network": net, "source": "room", "gateway": [GW.key_text]}
+    m1 = manifest_article(OWNER, PORTAL, {
+        "v": 1, "name": "loop.portal", "type": "open", "owner": OWNER.key_text, "serial": 1,
+        "min_pow": 0, "retention_days": 90, "portals": [entry("loop")]}, 0)
+    old = new_article(PORTAL, "Old", "Before the second portal.").finalize(USER, 0)
+    m2 = manifest_article(OWNER, PORTAL, {
+        "v": 1, "name": "loop.portal", "type": "open", "owner": OWNER.key_text, "serial": 2,
+        "min_pow": 0, "retention_days": 90, "portals": [entry("loop"), entry("other")]}, 0)
+    new = new_article(PORTAL, "New", "After both.").finalize(USER, 0)
+    state = State(tmp_path / "gw.db")
+    monkeypatch.setattr(portal_mod.random, "uniform", lambda lo, hi: 0.0)
+    sent = {}
+
+    def one_pass(arts):
+        for net in ("loop", "other"):
+            cp = LoopCounterpart(state, network=net)
+            p = portal_mod.Portal(state=state, node=PortalNode(arts), gateway=GW,
+                                  counterpart=cp, group_id=PORTAL, pow_bits=0, delay_max=0)
+            asyncio.run(p.run())
+            sent.setdefault(net, []).extend(cp.sent)
+
+    one_pass([m1, old])
+    one_pass([m1, old, m2, new])
+    assert sent["loop"] == [old.message_id, new.message_id]
+    assert sent["other"] == [new.message_id]         # not the post from before it opened
+
+
+def test_nostr_portal_keeps_its_old_state(tmp_path):
+    state = State(tmp_path / "gw.db")
+    state.set_cursor("unseenet", f"portal:{PORTAL}", 7)
+    state.set_cursor("unseenet", f"portal-opened:{PORTAL}", 3)
+    cp = LoopCounterpart(state, network="nostr")
+    p = portal_mod.Portal(state=state, node=PortalNode([]), gateway=GW, counterpart=cp,
+                          group_id=PORTAL, pow_bits=0)
+    assert state.get_cursor("unseenet", p.cursor_key) == 7
+    assert state.get_cursor("unseenet", p.opened_key) == 3
+    other = portal_mod.Portal(state=state, node=PortalNode([]), gateway=GW,
+                              counterpart=LoopCounterpart(state, network="matrix"),
+                              group_id=PORTAL, pow_bits=0)
+    assert state.get_cursor("unseenet", other.opened_key) is None

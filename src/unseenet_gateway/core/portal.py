@@ -111,12 +111,40 @@ class Portal:
         self.manifest: Manifest | None = None
         self.pending: dict[str, _Pending] = {}
         self._warned = ""
-        self.cursor_key = f"portal:{group_id}"
-        self.opened_key = f"portal-opened:{group_id}"
+        # One group can have portals to several networks; each keeps its own
+        # read cursor, opening point and delays (a portal opened later must not
+        # inherit an earlier one's opening, or older posts would go out).
+        tag = f"{group_id}|{self.network}|{self.source}"
+        self.cursor_key = f"portal:{tag}"
+        self.opened_key = f"portal-opened:{tag}"
+        self.due_prefix = f"portal-due:{tag}:"
+        self._migrate(group_id)
+
+    def _migrate(self, group_id: str) -> None:
+        """Before portals were kept apart per network only Nostr had them, under keys
+        named by the group alone; a Nostr portal takes those over once."""
+        if self.network != "nostr" or self.state.get_cursor("unseenet", self.cursor_key) is not None:
+            return
+        db = self.state.db
+        for old, new in ((f"portal:{group_id}", self.cursor_key),
+                         (f"portal-opened:{group_id}", self.opened_key)):
+            db.execute("UPDATE cursor SET source=? WHERE network='unseenet' AND source=?",
+                       (new, old))
+        db.execute("UPDATE cursor SET source=? || substr(source, ?) "
+                   "WHERE network='unseenet' AND source LIKE ?",
+                   (self.due_prefix, len(f"portal-due:{group_id}:") + 1,
+                    f"portal-due:{group_id}:%"))
+        db.commit()
+
+    def _sent(self, mid: str) -> bool:
+        """Whether this portal's network already has ``mid`` (another portal's doesn't count)."""
+        return self.state.db.execute(
+            "SELECT 1 FROM ids WHERE network=? AND unseenet_id=?",
+            (self.network, mid)).fetchone() is not None
 
     # --- the delay, kept in the state ---
     def _due_key(self, mid: str) -> str:
-        return f"portal-due:{self.group_id}:{mid}"
+        return f"{self.due_prefix}{mid}"
 
     def _due(self, mid: str, now: float) -> float:
         """When ``mid`` may go out: drawn once, then the same on every pass."""
@@ -131,7 +159,7 @@ class Portal:
         """Forget one article's due time, or (None) all of this portal's."""
         if mid is None:
             self.state.db.execute("DELETE FROM cursor WHERE network=? AND source LIKE ?",
-                                  ("unseenet", f"portal-due:{self.group_id}:%"))
+                                  ("unseenet", f"{self.due_prefix}%"))
         else:
             self.state.db.execute("DELETE FROM cursor WHERE network=? AND source=?",
                                   ("unseenet", self._due_key(mid)))
@@ -216,7 +244,7 @@ class Portal:
         for n, art in arts:
             if n <= opened or art.message_id in self.pending:
                 continue
-            if self.state.foreign_for(art.message_id):
+            if self._sent(art.message_id):
                 continue
             if exportable(art, self.gateway.public_key) is None:
                 self.pending[art.message_id] = _Pending(n, self._due(art.message_id, now), art)
