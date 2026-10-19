@@ -19,7 +19,8 @@ from dataclasses import dataclass
 
 from unseenet.core import crypto
 from unseenet.core.article import Article, ArticleError, validate_structure
-from unseenet.core.groups import approve, make_manifest, open_inbox_article, personal_inbox_id
+from unseenet.core.groups import (Manifest, approve, check_permitted, make_manifest,
+                                  open_inbox_article, personal_inbox_id)
 from unseenet.nntp import NNTPError, strip_reader_headers
 
 from .adapter import is_text
@@ -27,6 +28,8 @@ from .state import State
 from .unseenet_side import Node
 
 log = logging.getLogger(__name__)
+
+MANIFEST_TTL = 300                # seconds a group's manifest is trusted between reads
 SUBMISSION_TYPE = "message/unseenet"
 
 
@@ -40,6 +43,7 @@ class ExportStats:
     refused: int = 0
     failed: int = 0
     waiting: int = 0
+    unmatched: int = 0          # on the other network, but the node refused the copy
 
 
 def inbox_manifest(gateway: crypto.Identity, pow_bits: int = 18) -> Article:
@@ -60,6 +64,7 @@ class Exporter:
         self.delay_max = delay_max
         self.watcher = watcher          # core/cooperation.py, when other gateways may share
         self.inbox = personal_inbox_id(gateway.public_key)
+        self._manifests: dict[str, tuple[Manifest | None, float]] = {}
         self.state.db.execute("CREATE TABLE IF NOT EXISTS exports ("
                               "author TEXT NOT NULL, at INTEGER NOT NULL)")
 
@@ -113,6 +118,37 @@ class Exporter:
             raise Refused("rate limit for this key")
         return net
 
+    async def _manifest(self, group_id: str) -> Manifest | None:
+        """The group's current manifest: the watcher's, or read from the node (cached)."""
+        view = getattr(self.watcher, "views", {}).get(group_id) if self.watcher else None
+        if view is not None and view.manifest is not None:
+            return view.manifest
+        hit = self._manifests.get(group_id)
+        if hit is not None and time.time() - hit[1] < MANIFEST_TTL:
+            return hit[0]
+        try:
+            m = await self.node.manifest(group_id)
+        except (NNTPError, ConnectionError, OSError) as exc:
+            log.debug("manifest of %s: %s", group_id, exc)
+            m = None
+        self._manifests[group_id] = (m, time.time())
+        return m
+
+    @staticmethod
+    def _permitted(approved: Article, m: Manifest | None) -> None:
+        """Would the group take the approved copy? Asked *before* it goes to the other
+        network, which cannot be undone: a banned author, a chat line in a group of posts
+        or too little postage would otherwise be on the other network and never here.
+        The node's own rules (its postage, blocks) can still refuse it after."""
+        if m is None:
+            return                                       # unknown: the node decides
+        if approved.proven_pow() < m.min_pow:
+            raise Refused(f"postage below the group's {m.min_pow} bits")
+        try:
+            check_permitted(approved, m, {})
+        except ArticleError as exc:
+            raise Refused(f"the group would refuse it: {exc}") from exc
+
     def _due(self, mid: str, group: str, now: float) -> float:
         """When a submission may go out: the random delay of UN-RFC 0023 5.2, drawn once
         and kept in the state, plus this gateway's turn (UN-RFC 0038 section 5)."""
@@ -155,6 +191,14 @@ class Exporter:
                 log.info("submission %s already sent by another gateway", art.message_id)
                 self._done(art.message_id)
                 continue
+            approved = approve(Article.from_bytes(art.to_bytes()), self.gateway)
+            try:
+                self._permitted(approved, await self._manifest(art.group))
+            except Refused as r:
+                st.refused += 1
+                log.info("submission %s refused: %s", art.message_id, r)
+                self._done(art.message_id)
+                continue
             try:
                 foreign_id = await self.targets[art.group][1](art)
             except Exception as exc:  # noqa: BLE001  (refused by the other network)
@@ -162,11 +206,12 @@ class Exporter:
                 log.warning("%s refused %s: %s", net, art.message_id, exc)
                 self._done(art.message_id)
                 continue
-            approve(art, self.gateway)                   # only after the other side accepted
-            try:
-                await self.node.post(art)
+            try:                                         # posted only after the other side took it
+                await self.node.post(approved)
             except NNTPError as exc:
-                log.warning("node refused approved %s: %s", art.message_id, exc)
+                st.unmatched += 1
+                log.error("%s took %s as %s, but the node refused the approved copy: %s",
+                          net, art.message_id, foreign_id, exc)
             self.state.remember(net, foreign_id, art.message_id, art.group, "out")
             self.state.db.execute("INSERT INTO exports VALUES (?,?)",
                                   (art["Author-Key"], int(time.time())))

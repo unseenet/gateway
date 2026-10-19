@@ -127,7 +127,7 @@ def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
         rt = title_of(root) if root else None
         subject = clean("Re: " + (rt or "(thread)"), MAX_SUBJECT)
     else:
-        subject = first_line(ev.content, 80) or "(chat)"
+        subject = ""                # a chat line: never a made-up subject (UN-RFC 0028 3.3)
 
     refs = []
     for eid in (root, parent):
@@ -139,7 +139,8 @@ def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
     from_name = clean(author, MAX_FROM) if author else short_npub(ev.pubkey)
     when = format_datetime(datetime.fromtimestamp(ev.created_at, timezone.utc))
 
-    extra = [("Content-Type", "text/plain; charset=utf-8")]
+    extra = [("Content-Type", "text/plain; charset=utf-8"),
+             ("Message-Kind", "chat" if ev.kind == CHAT else "post")]
     extra += origin_headers(NETWORK, ev.id, when, npub(ev.pubkey))
     extra.append(("Origin-Proof", ev.to_json()))
     extra.append(("Nostr-Kind", str(ev.kind)))

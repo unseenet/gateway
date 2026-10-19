@@ -82,7 +82,11 @@ def test_comment_threads_under_root():
 
 def test_chat_message():
     ev = sign_event(BOB, 9, "just chatting\nmore", [["h", "lab"]])
-    assert conv(ev)["Subject"] == "just chatting"
+    art = conv(ev)
+    assert art.get("Subject", "") == ""               # no made-up subject (UN-RFC 0028 3.3)
+    assert art["Message-Kind"] == "chat"
+    thread = conv(sign_event(BOB, 11, "body", [["h", "lab"], ["title", "Topic"]]))
+    assert thread["Message-Kind"] == "post" and thread["Subject"] == "Topic"
 
 
 @pytest.mark.parametrize("kind,tags,content,reason", [

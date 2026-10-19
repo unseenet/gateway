@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 
 from unseenet.core import crypto
-from unseenet.core.article import Article
-from unseenet.core.groups import make_group_id, manifest_article
+from unseenet.core.article import Article, ArticleError
+from unseenet.core.groups import Manifest, make_group_id, manifest_article
 from unseenet.nntp import Client, NNTPError
 
 log = logging.getLogger(__name__)
@@ -82,6 +82,28 @@ class Node:
         if code == 441 and text.startswith("duplicate"):
             return "duplicate"
         raise NNTPError(code, text)
+
+    async def manifest(self, group_id: str) -> Manifest | None:
+        """The newest valid manifest the node holds for the group, read with HDR Control."""
+        c = await self._conn()
+        try:
+            _, low, high = await c.group(group_id)
+        except NNTPError:
+            return None
+        best = None
+        if high < low:
+            return None
+        for line in await c.multiline(f"HDR Control {low}-{high}", 225):
+            number, _, value = line.partition(" ")
+            if value.strip().lower() != "manifest":
+                continue
+            try:
+                m = Manifest.from_article(Article.from_bytes(await c.article(number)))
+            except (ArticleError, ValueError, TypeError, NNTPError):
+                continue
+            if m.group_id == group_id and m.supersedes(best):
+                best = m
+        return best
 
     async def close(self) -> None:
         if self.client is not None:
