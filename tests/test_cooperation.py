@@ -129,3 +129,14 @@ def test_announcer_posts_only_when_something_changed(tmp_path):
     ad._groups.append(make_group_id("matrix.x.other", OWNER.public_key))
     asyncio.run(an.run())
     assert len(node.groups[an.directory]) == 2
+
+
+def test_a_new_peer_always_raises_the_serial(tmp_path):
+    from unseenet_gateway.cli import manifest_serial
+
+    class Ad:
+        section = {"manifest_serial": 1}
+    st = State(tmp_path / "s.db")
+    assert manifest_serial(st, Ad, GID, bump=True) == 2        # serial 1 is out already
+    assert manifest_serial(st, Ad, GID) == 2
+    assert manifest_serial(st, Ad, GID, bump=True) == 3
