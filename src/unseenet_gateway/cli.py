@@ -214,6 +214,20 @@ async def _close(task) -> None:
         pass
 
 
+async def keep_inbox(state: State, node: Node, gateway, pow_bits: int,
+                     every: int = 7 * 86400) -> None:
+    """The gateway's personal inbox must exist: submissions (UN-RFC 0009 section 3), the
+    operator's answers and join requests (UN-RFC 0038 3.2) arrive there. A gateway that
+    joins another's group never publishes a group manifest, so it is kept here."""
+    import time
+    key = "inbox-manifest-at"
+    if time.time() - (state.get_cursor("unseenet", key) or 0) < every:
+        return
+    await node.post(inbox_manifest(gateway, pow_bits))
+    state.set_cursor("unseenet", key, int(time.time()))
+    log.info("published the gateway's inbox manifest")
+
+
 async def cmd_import(cfg: dict, loop: bool) -> None:
     gw = cfg["gateway"]
     gateway = keys.load(Path(gw["gateway_key"]), keys.passphrase(*GATEWAY_PASS))
@@ -254,6 +268,11 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
 
     ads, feeds, tasks, exporter = build()
     while True:
+        if desk is not None or exporter is not None:
+            try:
+                await keep_inbox(state, node, gateway, pow_bits)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("inbox manifest not published: %s", exc)
         for task in tasks:
             try:
                 st = await task.run()
