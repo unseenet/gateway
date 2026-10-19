@@ -6,9 +6,10 @@
   unseenet-gateway -c gateway.toml run           a pass every `interval` seconds
   unseenet-gateway -c gateway.toml stats         what has been imported and skipped
 
-Networks are configured as sections ([usenet], [nostr], …); -n limits a command
-to one. Network adapters may add commands of their own (nostr-key: create the
-gateway's Nostr key, for export).
+Networks are configured as sections ([usenet], [nostr], [matrix], …); -n limits
+a command to one. Network adapters may add commands of their own (nostr-key:
+create the gateway's Nostr key, for export; matrix-login: save the token of
+the gateway's Matrix account).
 
 Passphrases come from UNSEENET_GATEWAY_PASSPHRASE (gateway key) and
 UNSEENET_GATEWAY_GROUP_PASSPHRASE (group key), or are asked for.
@@ -92,6 +93,7 @@ async def cmd_create_groups(cfg: dict) -> None:
                 submissions=inbox if c.direction == "both" else None,
                 operator=gw["operator"], contact=gw["contact"], abuse=gw.get("abuse", ""),
                 policy=gw.get("policy", ""), title=c.title, description=c.description,
+                view=c.view, kinds=c.kinds,
                 serial=int(ad.section.get("manifest_serial", 1)),
                 retention_days=int(ad.section.get("retention_days", 90)),
                 pow_bits=int(gw.get("pow_bits", 18)))

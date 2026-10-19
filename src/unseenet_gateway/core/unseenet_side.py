@@ -21,6 +21,7 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
                      operator: str, contact: str, abuse: str = "", policy: str = "",
                      title: str = "", description: str = "", serial: int = 1,
                      retention_days: int = 90, submissions: str | None = None,
+                     view: str = "", kinds: tuple[str, ...] = (),
                      pow_bits: int = 18) -> Article:
     """Manifest of a gatewayed group (UN-RFC 0023 section 3.2): moderated, gateway key as moderator."""
     if direction not in ("import", "both"):
@@ -40,6 +41,10 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
         data["title"] = title[:128]
     if description:
         data["description"] = description[:2048]
+    if view:
+        data["view"] = view                  # UN-RFC 0008 section 3.1
+    if kinds:
+        data["kinds"] = list(kinds)          # UN-RFC 0028 section 4.1
     return manifest_article(owner, make_group_id(name, owner.public_key), data, pow_bits)
 
 
