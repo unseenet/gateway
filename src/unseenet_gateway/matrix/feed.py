@@ -38,6 +38,8 @@ class RoomMoved(Exception):
 def openness(state: list[dict]) -> str | None:
     """Why a room may not be gatewayed, from its state events; None if it may."""
     by_type = {e.get("type"): e.get("content") or {} for e in state}
+    if by_type.get("m.room.create", {}).get("type") == "m.space":
+        return "a space, not a room"            # spaces hold rooms; nobody chats in them
     if "m.room.encryption" in by_type:
         return "encrypted"
     rule = by_type.get("m.room.join_rules", {}).get("join_rule")
@@ -134,7 +136,9 @@ class MatrixFeed(Feed):
     async def room_is_public(self, room: str, rid: str) -> bool:
         """Checked every pass: a room can become private or encrypted later."""
         state = [{"type": "m.room.join_rules",
-                  "content": await self.matrix.state(rid, "m.room.join_rules") or {}}]
+                  "content": await self.matrix.state(rid, "m.room.join_rules") or {}},
+                 {"type": "m.room.create",
+                  "content": await self.matrix.state(rid, "m.room.create") or {}}]
         enc = await self.matrix.state(rid, "m.room.encryption")
         if enc is not None:
             state.append({"type": "m.room.encryption", "content": enc})
