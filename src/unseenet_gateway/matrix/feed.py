@@ -123,8 +123,12 @@ class MatrixFeed(Feed):
             # the room was written without its consent, and stays out.
             self.state.set_cursor(NETWORK, rid, int(time.time() * 1000))
         if room in self.announce:
-            await self.matrix.send(rid, {"msgtype": "m.notice", "body": self.announce[room]},
-                                   txn_id=f"unseenet-announce-{int(time.time())}")
+            try:
+                await self.matrix.send(rid, {"msgtype": "m.notice", "body": self.announce[room]},
+                                       txn_id=f"unseenet-announce-{int(time.time())}")
+            except MatrixError as exc:     # e.g. a room where only admins may write
+                log.warning("%s: could not post the notice that the room is gatewayed (%s); "
+                            "importing anyway, but export needs the right to write", room, exc)
         return rid
 
     async def room_is_public(self, room: str, rid: str) -> bool:

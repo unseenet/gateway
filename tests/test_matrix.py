@@ -244,3 +244,24 @@ def test_new_thread_carries_its_subject():
     bodies = list(sent.values())
     assert bodies[0].split("\n")[0].endswith("on Unseenet: Topic")
     assert bodies[1].split("\n")[0].endswith("on Unseenet:")
+
+
+def test_join_survives_a_room_where_the_gateway_may_not_write(tmp_path):
+    import asyncio
+    from unseenet_gateway.core.state import State
+    from unseenet_gateway.matrix.client import MatrixError
+    from unseenet_gateway.matrix.feed import MatrixFeed
+
+    class FakeMatrix:
+        base, user_id = "https://x", "@gw:x"
+        joined = False
+        async def resolve(self, room): return "!r:x"
+        async def membership(self, rid): return "join" if self.joined else None
+        async def invites(self): return {"!r:x": st("public")}
+        async def whoami(self): return self.user_id
+        async def join(self, rid): self.joined = True
+        async def send(self, *a, **k): raise MatrixError(403, "M_FORBIDDEN", "send_level 100")
+
+    feed = MatrixFeed(state=State(tmp_path / "s.db"), matrix=FakeMatrix(), carried={},
+                      announce={"#r:x": "hello"})
+    assert asyncio.run(feed.ensure_joined("#r:x")) == "!r:x"
