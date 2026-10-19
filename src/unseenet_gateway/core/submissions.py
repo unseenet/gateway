@@ -22,6 +22,7 @@ from unseenet.core.article import Article, ArticleError, validate_structure
 from unseenet.core.groups import approve, make_manifest, open_inbox_article, personal_inbox_id
 from unseenet.nntp import NNTPError, strip_reader_headers
 
+from .adapter import is_text
 from .state import State
 from .unseenet_side import Node
 
@@ -99,8 +100,8 @@ class Exporter:
             raise Refused("control article")
         if "Encrypted" in art:
             raise Refused("encrypted")
-        if not art.get("Content-Type", "text/plain").startswith("text/plain"):
-            raise Refused("not plain text")
+        if not is_text(art):
+            raise Refused("not text")
         if art.proven_pow() < self.min_pow:
             raise Refused(f"postage below {self.min_pow} bits")
         hour_ago = int(time.time()) - 3600

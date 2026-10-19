@@ -16,10 +16,12 @@ Application Service on the gateway's own homeserver; that is a later step.
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 
 from unseenet.core import crypto
 from unseenet.core.article import Article
+from unseenet.core.markup import is_markdown
 
 from ..core.adapter import ExportError
 from ..core.state import State
@@ -32,6 +34,16 @@ log = logging.getLogger(__name__)
 def author_line(art: Article) -> str:
     fp = crypto.fingerprint(art.author_key)[:4]
     return f"{art.get('From', 'anonymous')} ({fp}) on Unseenet"
+
+
+def markdown_html(text: str, kind: str = "post") -> str:
+    """Unseenet Markdown as HTML for Matrix's formatted_body: raw HTML is never passed
+    through (the parser has it off) and images are left out (Matrix shows mxc:// only)."""
+    from unseenet.core.markup import _parser
+    md = _parser(kind == "chat").disable("image")
+    # the core parser filters links itself, after parsing; HTML needs its own guard
+    md.validateLink = lambda url: url.strip().lower().startswith(("http://", "https://", "mailto:"))
+    return md.render(text).strip()
 
 
 def txn_id(message_id: str) -> str:
@@ -71,6 +83,10 @@ class MatrixSender:
             "body": f"{head}\n{text}",
             FROM_UNSEENET_KEY: art.message_id,
         }
+        if is_markdown(art.get("Content-Type")):         # UN-RFC 0031: show it formatted
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = (f"<p><b>{html.escape(head)}</b></p>"
+                                         + markdown_html(text, art.get("Message-Kind", "post")))
         parent = await self._parent(rid, art)
         if parent is not None:
             root = thread_root(parent.get("content") or {})
