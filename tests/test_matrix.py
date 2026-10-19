@@ -267,3 +267,44 @@ def test_join_survives_a_room_where_the_gateway_may_not_write(tmp_path):
     feed = MatrixFeed(state=State(tmp_path / "s.db"), matrix=FakeMatrix(), carried={},
                       announce={"#r:x": "hello"})
     assert asyncio.run(feed.ensure_joined("#r:x")) == "!r:x"
+
+
+def test_markdown_goes_to_matrix_formatted_and_safe():
+    import asyncio
+    from unseenet.core.article import new_article
+    from unseenet.core.markup import MARKDOWN_TYPE
+    from unseenet_gateway.core.adapter import is_text
+    from unseenet_gateway.matrix.exporter import MatrixSender, markdown_html
+
+    html = markdown_html("**bold** [ok](https://unseenet.org) [bad](javascript:alert(1)) "
+                         "<script>x</script> ![img](https://x/y.png)")
+    assert "<strong>bold</strong>" in html and 'href="https://unseenet.org"' in html
+    assert "javascript:" not in html.split("href=")[-1][:20] and "<script>" not in html
+    assert "<img" not in html
+
+    sent = {}
+
+    class FakeMatrix:
+        async def membership(self, rid):
+            return "join"
+
+        async def send(self, rid, content, txn):
+            sent.update(content)
+            return "$x"
+
+    class FakeState:
+        def foreign_for(self, mid):
+            return None
+
+    async def rid(_):
+        return "!r:x"
+
+    art = new_article(GROUP_ID, "", "Hej **verden**", from_name="Andreas",
+                      extra=[("Content-Type", MARKDOWN_TYPE), ("Message-Kind", "chat")]
+                      ).finalize(crypto.Identity.generate(), 0)
+    assert is_text(art)
+    asyncio.run(MatrixSender(matrix=FakeMatrix(), state=FakeState(), rooms={GROUP_ID: "#r:x"},
+                             room_id_of=rid).send(art))
+    assert sent["body"].endswith("Hej **verden**")
+    assert sent["format"] == "org.matrix.custom.html"
+    assert "<strong>verden</strong>" in sent["formatted_body"] and "Andreas" in sent["formatted_body"]

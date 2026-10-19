@@ -39,6 +39,15 @@ from unseenet.core.article import Article
 from unseenet.core.groups import make_group_id
 
 
+def is_text(art: Article) -> bool:
+    """Plain text, or Unseenet's Markdown (UN-RFC 0031): what a gateway may send out.
+    Markdown goes out as its source text, which reads well as plain text; an adapter
+    whose network shows formatting may render it as well."""
+    from unseenet.core.markup import is_markdown
+    ct = art.get("Content-Type", "text/plain")
+    return ct.startswith("text/plain") or is_markdown(ct)
+
+
 class Skip(Exception):
     """A foreign message is not imported. ``reason`` is a short, loggable word."""
 
