@@ -7,6 +7,7 @@ special status (UN-RFC 0023, section 6.3).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from unseenet.core import crypto
 from unseenet.core.article import Article, ArticleError
@@ -55,11 +56,39 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
 
 
 class Node:
-    """One connection to an Unseenet node, reopened when it drops."""
+    """One connection to an Unseenet node, reopened when it drops.
+
+    Posting goes through the core's ``Session`` (unseenet#121, gateway#19): an article
+    signed by one of the gateway's keys is posted by that key's session, which ripens
+    the key first where the node asks for it, sets ``Key-Ripening``, sends the key's
+    chain to a node that lacks it, and pays the postage the key's level needs
+    (UN-RFC 0025). ``use_key`` gives the node a key and where its chain is kept."""
 
     def __init__(self, address: str, socks_port: int | None):
         self.address, self.socks_port = address, socks_port
         self.client: Client | None = None
+        self._keys: dict[bytes, tuple[crypto.Identity, Path]] = {}
+        self._sessions: dict[bytes, object] = {}
+
+    def use_key(self, key: crypto.Identity, state: str | Path) -> None:
+        """Post articles signed by ``key`` through a session for it; ``state`` keeps
+        its public ripening chain (nothing secret), e.g. ``<key file>.state.json``."""
+        self._keys[key.public_key] = (key, Path(state))
+
+    async def session(self, key: crypto.Identity):
+        """The core Session for one of our keys, over the gateway's Tor."""
+        from unseenet.client.session import Session
+        s = self._sessions.get(key.public_key)
+        if s is None:
+            _, state = self._keys[key.public_key]
+            s = Session.from_key(key, state, name="gateway", display="gateway",
+                                 status=lambda text: log.info("%s", text))
+            if self.address not in s.nodes:
+                s.add_node(self.address)
+            if self.socks_port is not None:
+                await s.set_tor(f"127.0.0.1:{self.socks_port}")
+            self._sessions[key.public_key] = s
+        return s
 
     async def _conn(self) -> Client:
         if self.client is None:
@@ -68,6 +97,9 @@ class Node:
 
     async def post(self, art: Article) -> str:
         """Post; returns 'ok', 'duplicate' or raises NNTPError for other refusals."""
+        mine = self._keys.get(art.author_key) if art.get("Author-Key") else None
+        if mine is not None or self._keys:
+            return await self._post_by_session(art, mine[0] if mine else None)
         for attempt in (1, 2):
             try:
                 c = await self._conn()
@@ -82,6 +114,27 @@ class Node:
         if code == 441 and text.startswith("duplicate"):
             return "duplicate"
         raise NNTPError(code, text)
+
+    async def _post_by_session(self, art: Article, key: crypto.Identity | None) -> str:
+        """Through the signing key's session; an article by another key (a submission,
+        an owner's manifest from elsewhere) goes as it is, through the first one."""
+        from unseenet.client.session import SessionError
+        s = await self.session(key or next(iter(self._keys.values()))[0])
+        try:
+            await s.post_article(art, node=self.address, sign_with=key)
+        except SessionError as exc:
+            text = str(exc).removeprefix("rejected by node: ")
+            if text.startswith("duplicate"):
+                return "duplicate"
+            code = int(text[:3]) if text[:3].isdigit() else 441
+            raise NNTPError(code, text) from exc
+        return "ok"
+
+    async def ripen(self, key: crypto.Identity, to: int) -> None:
+        """Ripen ``key`` on to level ``to`` in the background, publishing ripe@ at each
+        level (the core's ClientRuntime, low priority); 3 needs no surcharge."""
+        from unseenet.client.runtime import ClientRuntime
+        await ClientRuntime(await self.session(key), ripen_to=to).ripen()
 
     async def manifest(self, group_id: str) -> Manifest | None:
         """The newest valid manifest the node holds for the group, read with HDR Control."""
@@ -106,9 +159,20 @@ class Node:
         return best
 
     async def close(self) -> None:
+        """Drop the connection (it is opened again when needed); the sessions stay."""
         if self.client is not None:
             try:
                 await self.client.quit()
             except Exception:  # noqa: BLE001
                 pass
             self.client = None
+
+    async def shutdown(self) -> None:
+        """At the end: the connection and the sessions."""
+        await self.close()
+        for s in self._sessions.values():
+            try:
+                await s.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._sessions.clear()
