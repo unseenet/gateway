@@ -24,6 +24,7 @@ from .relay import Relay
 
 log = logging.getLogger(__name__)
 JOIN = 9021
+DELETION = 5                     # NIP-09: the author asks relays to delete an event
 
 
 def signature_line(art: Article) -> str:
@@ -89,3 +90,14 @@ class NostrSender:
         if not ok:
             raise ExportError(msg)
         return ev.id
+
+    async def retract(self, art: Article, foreign_id: str) -> bool:
+        """Take back an event this gateway sent, when the node refused the approved
+        copy (#18): a NIP-09 deletion (kind 5) of our own event, in the same group."""
+        reason = "Not accepted in Unseenet, so taken back by the gateway"
+        tags = [["e", foreign_id], ["h", self.groups[art.group]]]
+        ev = sign_event(self.secret, DELETION, reason, tags)
+        ok, msg = await self.relay.publish(ev)
+        if not ok:
+            log.warning("could not take back %s on %s: %s", foreign_id, self.relay.url, msg)
+        return ok
