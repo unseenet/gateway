@@ -102,6 +102,7 @@ cp gateway.example.toml gateway.toml          # and edit it
 
 unseenet-gateway -c gateway.toml keys            # creates the group key and the gateway key
 # put the printed group key in gateway.group_owner
+unseenet-gateway -c gateway.toml ripen --group-key   # once: 7-11 minutes per key, see below
 unseenet-gateway -c gateway.toml create-groups   # publishes one manifest per group
 unseenet-gateway -c gateway.toml import-once -v
 unseenet-gateway -c gateway.toml run             # every `interval` seconds
@@ -114,6 +115,18 @@ Passphrases are read from `UNSEENET_GATEWAY_PASSPHRASE` (gateway key) and
 `UNSEENET_GATEWAY_GROUP_PASSPHRASE` (group key), or asked for. After
 `create-groups`, move the group key file off the gateway host: it is only
 needed again to change a group's manifest.
+
+**Key ripening** (UN-RFC 0025). Nodes take articles only from keys that have
+done a few minutes of work, which keeps throwaway keys from spamming. The
+gateway posts through the unseenet core, so ripening, the `Key-Ripening`
+header and postage are the same as in every client. `ripen` does the work
+for the gateway key (and with `--group-key` the group key) once at setup and
+publishes it: about 7-11 minutes each, one core. The chains are kept beside
+the key files as `<key file>.state.json` (public, nothing secret). While
+`run` runs, the gateway key ripens on to level 3, where it pays no extra
+postage: a few days on one core at low priority. The group key stays at
+level 0; it only signs manifests now and then. If a key was ripened and
+published elsewhere, the gateway takes its chain over instead of starting again.
 
 ## Requests from other networks
 

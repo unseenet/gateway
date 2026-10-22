@@ -25,6 +25,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from unseenet.client.runtime import SERVICE_RIPEN_TO
 from unseenet.core import crypto
 from unseenet.core.groups import personal_inbox_id
 
@@ -136,13 +137,68 @@ def cmd_keys(cfg: dict) -> None:
     print("and move the group key file off this host once the groups exist.")
 
 
+def key_state(key_file: str) -> Path:
+    """Where a key's public ripening chain is kept (UN-RFC 0025): beside its file."""
+    return Path(f"{key_file}.state.json")
+
+
+def make_node(cfg: dict, *, gateway, owner=None) -> Node:
+    """The node, posting through the core's Session for our keys (gateway#19)."""
+    gw = cfg["gateway"]
+    node = Node(cfg["unseenet"]["node"], cfg["unseenet"].get("socks_port"))
+    node.use_key(gateway, key_state(gw["gateway_key"]))
+    if owner is not None:
+        node.use_key(owner, key_state(gw["group_key"]))
+    return node
+
+
+async def ripen_quietly(node: Node, key, to: int) -> None:
+    try:
+        await node.ripen(key, to)
+    except Exception as exc:  # noqa: BLE001 - posting ripens to level 0 by itself anyway
+        log.warning("ripening stopped: %s", exc)
+
+
+async def cmd_ripen(cfg: dict, to: int, group_key: bool) -> None:
+    """Ripen the gateway key (and with --group-key the group key) to a level and
+    publish its chain (UN-RFC 0025): once at setup, 7-11 minutes to level 0."""
+    from unseenet.core import ripening as rp
+    if not rp.available():
+        sys.exit("key ripening needs chiavdf (pip install chiavdf)")
+    gw = cfg["gateway"]
+    gateway = keys.load(Path(gw["gateway_key"]), keys.passphrase(*GATEWAY_PASS))
+    todo = [("gateway key", gateway)]
+    owner = None
+    if group_key:
+        owner = keys.load(Path(gw["group_key"]), keys.passphrase(*GROUP_PASS))
+        todo.append(("group key", owner))
+    node = make_node(cfg, gateway=gateway, owner=owner)
+    try:
+        for label, key in todo:
+            s = await node.session(key)
+            await s.adopt_published_ripening()          # ripened elsewhere already?
+            print(f"{label} {key.key_text}: level {s.ripening().level}", flush=True)
+            while s.ripening().level is None or s.ripening().level < to:
+                if not await s.ripen_segment():
+                    break
+                lv = s.ripening().level
+                print(f"  t = {s.ripening().t:,}, level {lv}", flush=True)
+                if lv is not None and lv != s.published_level():
+                    await s.publish_ripening()
+            if s.ripening().level != s.published_level():
+                await s.publish_ripening()
+            print(f"{label}: level {s.ripening().level}, published", flush=True)
+    finally:
+        await node.shutdown()
+
+
 async def cmd_create_groups(cfg: dict) -> None:
     gw = cfg["gateway"]
     owner = keys.load(Path(gw["group_key"]), keys.passphrase(*GROUP_PASS))
     gateway = keys.load(Path(gw["gateway_key"]), keys.passphrase(*GATEWAY_PASS))
     if owner.key_text != gw["group_owner"]:
         sys.exit("group_owner in the config does not match the group key")
-    node = Node(cfg["unseenet"]["node"], cfg["unseenet"].get("socks_port"))
+    node = make_node(cfg, gateway=gateway, owner=owner)
     state = State(Path(gw["state"]))
     ads = configured(cfg, make_desk(cfg, state, node, gateway))   # approved sources too
     if int(gw.get("pow_bits", 18)) < int(gw.get("export_min_pow", 20)) and any(
@@ -156,7 +212,7 @@ async def cmd_create_groups(cfg: dict) -> None:
                 continue
             print(f"{await publish_manifest(cfg, ad, c, owner, gateway, node, state):9} "
                   f"{c.group_id}")
-    await node.close()
+    await node.shutdown()
 
 
 def make_portals(cfg: dict, gateway, state: State, node: Node, feeds: list) -> list[Portal]:
@@ -231,7 +287,7 @@ async def keep_inbox(state: State, node: Node, gateway, pow_bits: int,
 async def cmd_import(cfg: dict, loop: bool) -> None:
     gw = cfg["gateway"]
     gateway = keys.load(Path(gw["gateway_key"]), keys.passphrase(*GATEWAY_PASS))
-    node = Node(cfg["unseenet"]["node"], cfg["unseenet"].get("socks_port"))
+    node = make_node(cfg, gateway=gateway)
     state = State(Path(gw["state"]))
     pow_bits = int(gw.get("pow_bits", 18))
     desk = make_desk(cfg, state, node, gateway)
@@ -241,6 +297,9 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
         owner = keys.load(Path(gw["group_key"]), keys.passphrase(*GROUP_PASS))
         if owner.key_text != gw["group_owner"]:
             sys.exit("group_owner in the config does not match the group key")
+        node.use_key(owner, key_state(gw["group_key"]))
+    if loop:                           # on to level 3 (no surcharge), low priority (UN-RFC 0025)
+        ripening = asyncio.create_task(ripen_quietly(node, gateway, SERVICE_RIPEN_TO))
 
     seen: dict = {}                    # the Watcher's views, kept across rebuilds
 
@@ -302,7 +361,7 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
         await asyncio.sleep(int(gw.get("interval", 60)))
     for task in tasks:
         await _close(task)
-    await node.close()
+    await node.shutdown()
 
 
 async def desk_pass(cfg: dict, desk: Desk, ads: list[Adapter], feeds: list, owner, gateway,
@@ -407,8 +466,12 @@ def main() -> None:
     p.add_argument("-n", "--network", choices=list(known),
                    help="only this network (create-groups, import-once, run)")
     p.add_argument("--version", action="version", version=f"unseenet-gateway {__version__}")
-    p.add_argument("command", choices=["keys", "create-groups", "import-once", "run",
+    p.add_argument("command", choices=["keys", "ripen", "create-groups", "import-once", "run",
                                        "stats", *extra])
+    p.add_argument("--to", type=int, default=0, choices=range(5),
+                   help="ripen: the level to reach (0: enough to post; 3: no surcharge)")
+    p.add_argument("--group-key", action="store_true",
+                   help="ripen: the group key too (when it is on this host)")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO if a.verbose or a.command == "run" else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -419,6 +482,8 @@ def main() -> None:
         cmd_keys(cfg)
     elif a.command in extra:
         extra[a.command](cfg).run_command(a.command)
+    elif a.command == "ripen":
+        asyncio.run(cmd_ripen(cfg, a.to, a.group_key))
     elif a.command == "create-groups":
         asyncio.run(cmd_create_groups(cfg))
     elif a.command in ("import-once", "run"):
