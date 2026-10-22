@@ -97,7 +97,7 @@ Requires Python 3.11+, Tor, and INN carrying the groups you want.
 
 ```
 python3 -m venv .venv
-.venv/bin/pip install git+https://github.com/unseenet/gateway.git
+.venv/bin/pip install git+https://github.com/unseenet/unseenet-gateway.git
 cp gateway.example.toml gateway.toml          # and edit it
 
 unseenet-gateway -c gateway.toml keys            # creates the group key and the gateway key
