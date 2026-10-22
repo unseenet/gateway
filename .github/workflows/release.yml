@@ -1,4 +1,5 @@
 name: release
+# (unseenet-gateway: PyPI project unseenet-gateway, environment "pypi")
 # Push a tag like v0.1.0 to release (v0.1.1a1 for a test release: PyPI and GitHub
 # mark it as a pre-release). The tag must match __version__ and, for a full
 # release, have a section in CHANGELOG.md, which becomes the release notes.
