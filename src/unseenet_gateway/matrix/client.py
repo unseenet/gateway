@@ -183,3 +183,10 @@ class Matrix:
         r = await self.call("PUT", f"/rooms/{q(room_id)}/send/{q(event_type)}/{q(txn_id)}",
                             body=content)
         return r["event_id"]
+
+    async def redact(self, room_id: str, event_id: str, txn_id: str,
+                     reason: str | None = None) -> str:
+        """Redact an event (the bot's own); the same txn_id never redacts twice."""
+        r = await self.call("PUT", f"/rooms/{q(room_id)}/redact/{q(event_id)}/{q(txn_id)}",
+                            body={"reason": reason} if reason else {})
+        return r.get("event_id", "")

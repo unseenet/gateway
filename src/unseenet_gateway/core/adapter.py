@@ -200,7 +200,12 @@ class Adapter:
         raise NotImplementedError
 
     def export_targets(self, *, state, feeds: list[Feed]) -> dict[str, Send]:
-        """Unseenet Group ID -> send, for groups with direction "both"."""
+        """Unseenet Group ID -> send, for groups with direction "both".
+
+        ``send`` is best a bound method of a sender object. If that object also has
+        ``async retract(art, foreign_id) -> bool``, the exporter calls it when the node
+        refuses the approved copy after the other network took the message, so it does
+        not stay there alone (#18); it should take back only what this gateway sent."""
         return {}
 
     def counterpart(self, entry: dict, *, state, feeds: list[Feed]) -> Counterpart:

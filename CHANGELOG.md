@@ -31,6 +31,10 @@ from 0.4.0 need the gateway's keys ripened once (`unseenet-gateway ripen`).
   may not write does not stop the import.
 - **Export:** posts from Unseenet go to the other network through a
   submission queue, after asking the group (UN-RFC 0023 section 5).
+  When the node still refuses the approved copy (its own postage, a block
+  in the hierarchy), the message is taken back on the other network: a
+  redaction on Matrix, a NIP-09 deletion on Nostr, and only what this
+  gateway sent (#18).
 - **Portals:** an Unseenet group mirrored to Nostr or Matrix with the owner's
   consent, its counterpart named "<group> (Unseenet)".
 - **Requests:** rooms that invite the gateway become requests the operator

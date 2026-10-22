@@ -56,6 +56,7 @@ class MatrixSender:
         self.matrix, self.state = matrix, state
         self.rooms = rooms               # Unseenet Group ID -> room alias or id
         self.room_id_of = room_id_of     # async: alias -> room id (the feed's cache)
+        self._sent: set[str] = set()     # events this gateway sent, which it may take back
 
     async def _parent(self, rid: str, art: Article) -> dict | None:
         """The Matrix event this article answers, if it answers one we know."""
@@ -115,6 +116,24 @@ class MatrixSender:
             else:
                 content["m.relates_to"] = {"m.in_reply_to": {"event_id": parent["event_id"]}}
         try:
-            return await self.matrix.send(rid, content, txn_id(art.message_id))
+            event_id = await self.matrix.send(rid, content, txn_id(art.message_id))
         except MatrixError as exc:
             raise ExportError(str(exc)) from None
+        self._sent.add(event_id)
+        return event_id
+
+    async def retract(self, art: Article, foreign_id: str) -> bool:
+        """Take back an event this gateway sent, when the node refused the approved
+        copy (#18): a redaction. An event another gateway sent (``already_there``) is
+        not ours to take back."""
+        if foreign_id not in self._sent:
+            return False
+        rid = await self.room_id_of(self.rooms[art.group])
+        try:
+            await self.matrix.redact(rid, foreign_id, "retract-" + txn_id(art.message_id),
+                                     reason="Not accepted in Unseenet, so taken back by the gateway")
+        except MatrixError as exc:
+            log.warning("could not take back %s in %s: %s", foreign_id, self.rooms[art.group], exc)
+            return False
+        self._sent.discard(foreign_id)
+        return True

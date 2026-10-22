@@ -44,6 +44,7 @@ class ExportStats:
     failed: int = 0
     waiting: int = 0
     unmatched: int = 0          # on the other network, but the node refused the copy
+    retracted: int = 0          # the node refused the copy, so it was taken back there (#18)
 
 
 def inbox_manifest(gateway: crypto.Identity, pow_bits: int = 18) -> Article:
@@ -160,6 +161,19 @@ class Exporter:
         turn = self.watcher.delay(group) if self.watcher else 0.0
         return float(due) + (turn or 0.0)
 
+    async def _retract(self, art: Article, foreign_id: str) -> bool:
+        """Ask the adapter's sender to take back what it sent, if it can: a sender may
+        have ``retract(art, foreign_id) -> bool`` beside ``send`` (core/adapter.py)."""
+        send = self.targets[art.group][1]
+        retract = getattr(getattr(send, "__self__", None), "retract", None)
+        if retract is None:
+            return False
+        try:
+            return bool(await retract(art, foreign_id))
+        except Exception as exc:  # noqa: BLE001  (the other network said no)
+            log.warning("could not take back %s: %s", foreign_id, exc)
+            return False
+
     def _done(self, n_mid: str) -> None:
         self.state.db.execute("DELETE FROM cursor WHERE network='unseenet' AND source=?",
                               (f"export-due:{n_mid}",))
@@ -209,6 +223,15 @@ class Exporter:
             try:                                         # posted only after the other side took it
                 await self.node.post(approved)
             except NNTPError as exc:
+                # The pre-check cannot see the node's own rules (its postage, blocks):
+                # take the message back on the other network rather than leave it
+                # there alone (#18).
+                if await self._retract(art, foreign_id):
+                    st.retracted += 1
+                    log.warning("the node refused the approved copy of %s (%s); taken "
+                                "back on %s", art.message_id, exc, net)
+                    self._done(art.message_id)
+                    continue
                 st.unmatched += 1
                 log.error("%s took %s as %s, but the node refused the approved copy: %s",
                           net, art.message_id, foreign_id, exc)
