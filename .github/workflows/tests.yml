@@ -13,3 +13,17 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e .[dev]
       - run: pytest -q
+
+  core-main:
+    # The next core release (unseenet main), so this repo is ready the day it is
+    # released (unseenet/unseenet#386 section 4).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e .[dev]
+      - run: pip install --force-reinstall --no-deps "unseenet @ git+https://github.com/unseenet/unseenet@main"
+      - run: pip install "unseenet @ git+https://github.com/unseenet/unseenet@main"   # its new dependencies, if any
+      - run: python -m pytest -q
