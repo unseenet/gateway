@@ -41,13 +41,16 @@ def source_name(relay_url: str, group: str) -> str:
     return f"{relay_url}'{group}"
 
 
+PICTURE_LIMIT = 8 * 1024 * 1024      # never fetch more for one picture
+
+
 class NostrFeed(Feed):
     network = NETWORK
 
     def __init__(self, *, state: State, relay: Relay, carried: dict[str, str],
                  start: str = "new", lookback: int = 7 * 86400,
                  profile_relays: list[str] | None = None, proxy: str | None = None,
-                 label: str | None = None):
+                 label: str | None = None, socks_port: int | None = None, fetch=None):
         self.state, self.relay, self.carried = state, relay, carried
         self.start, self.lookback = start, lookback
         self.label = label or f"nostr {relay.url}"
@@ -58,6 +61,9 @@ class NostrFeed(Feed):
         self.profile_relays = PROFILE_RELAYS if profile_relays is None else profile_relays
         self.proxy = proxy
         self._read: set[str] = set()            # groups read to the end in this pass
+        # pictures are fetched only through the gateway's Tor (gateway#26)
+        self.socks_port = socks_port
+        self._fetch = fetch
 
     def sources(self) -> list[Source]:
         return [Source(g, gid) for g, gid in self.carried.items()]
@@ -157,6 +163,23 @@ class NostrFeed(Feed):
         return convert(item.payload, group_id=source.group_id,
                        id_map=lambda eid: self.state.lookup(NETWORK, eid),
                        title_of=self.titles.get, name_of=self.names.get)
+
+    async def media(self, source: Source, item: Incoming) -> list:
+        """The pictures a note in the group links to, fetched over Tor (gateway#26):
+        NIP-29 groups are moderated by their relay's admins, as Matrix rooms are."""
+        from ..core.files import Media, fetch_over_tor
+        from .convert import pictures_of
+        fetch = self._fetch or (lambda url, limit: fetch_over_tor(url, self.socks_port, limit))
+        out = []
+        for url, alt in pictures_of(item.payload):
+            try:
+                octets = await fetch(url, PICTURE_LIMIT)
+            except (OSError, ValueError, asyncio.TimeoutError) as exc:
+                log.info("picture %s not fetched: %s", url[:80], exc)
+                continue
+            name = url.split("?", 1)[0].rsplit("/", 1)[-1][:128] or "picture"
+            out.append(Media(name, octets, alt))
+        return out
 
     def imported(self, item: Incoming, art: Article) -> None:
         ev: Event = item.payload

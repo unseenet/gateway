@@ -10,8 +10,13 @@ line saying a picture was left out.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import re
+import secrets
+import ssl
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 IMAGE_TYPES = ("image/jpeg", "image/png", "image/gif", "image/webp")
 
@@ -68,3 +73,60 @@ def attach(art, files: list[Media], max_size: int) -> tuple[list, int, list[str]
     for name, value in attachment_headers(kept):
         art.set(name, value)
     return [(blob_id(o), o) for _, _, o, _, _ in kept], extra_bits_for(total) if kept else 0, notes
+
+
+# --- a picture linked from another network, fetched over Tor (gateway#26) ----------
+
+PICTURE_URL = re.compile(r"https://[^\s<>()\[\]\"']+?\.(?:jpe?g|png|gif|webp)(?:\?[^\s<>()\[\]\"']*)?",
+                         re.IGNORECASE)
+FETCH_TIMEOUT = 90
+
+
+async def fetch_over_tor(url: str, socks_port: int | None, limit: int,
+                         redirects: int = 3) -> bytes:
+    """GET a picture at an https URL through Tor, at most ``limit`` octets: the
+    gateway never shows its own address to a picture host. No Tor: nothing is
+    fetched. Only https, only a picture type, and at most ``redirects`` redirects."""
+    if not socks_port:
+        raise OSError("no Tor to fetch through")
+    for _ in range(redirects + 1):
+        u = urlsplit(url)
+        if u.scheme != "https" or not u.hostname:
+            raise ValueError("only https pictures")
+        from python_socks.async_.asyncio import Proxy
+        cred = secrets.token_hex(8)                    # a circuit of its own
+        proxy = Proxy.from_url(f"socks5://{cred}:{cred}@127.0.0.1:{socks_port}", rdns=True)
+        sock = await asyncio.wait_for(proxy.connect(dest_host=u.hostname, dest_port=u.port or 443),
+                                      FETCH_TIMEOUT)
+        r, w = await asyncio.wait_for(asyncio.open_connection(
+            sock=sock, ssl=ssl.create_default_context(), server_hostname=u.hostname),
+            FETCH_TIMEOUT)
+        try:
+            path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+            w.write((f"GET {path} HTTP/1.1\r\nHost: {u.netloc}\r\nAccept: image/*\r\n"
+                     "User-Agent: unseenet-gateway\r\nAccept-Encoding: identity\r\n"
+                     "Connection: close\r\n\r\n").encode())
+            await w.drain()
+            status = int((await asyncio.wait_for(r.readline(), FETCH_TIMEOUT)).split()[1])
+            headers = {}
+            while (line := (await r.readline()).decode("latin-1").rstrip("\r\n")):
+                k, _, v = line.partition(":")
+                headers[k.strip().lower()] = v.strip()
+            if status in (301, 302, 303, 307, 308) and headers.get("location"):
+                from urllib.parse import urljoin
+                url = urljoin(url, headers["location"])
+                continue
+            if status != 200:
+                raise OSError(f"HTTP {status}")
+            if not headers.get("content-type", "").lower().startswith("image/"):
+                raise ValueError("not a picture")
+            n = int(headers.get("content-length", "-1"))
+            if n > limit:
+                raise ValueError("too big")
+            data = await asyncio.wait_for(r.read(limit + 1), FETCH_TIMEOUT)
+            if len(data) > limit:
+                raise ValueError("too big")
+            return data
+        finally:
+            w.close()
+    raise ValueError("too many redirects")

@@ -146,6 +146,22 @@ def looks_like_markdown(text: str) -> bool:
     return bool(_MARKDOWN.search(text))
 
 
+def pictures_of(ev: Event) -> list[tuple[str, str]]:
+    """(url, alt) of the pictures a note carries: its ``imeta`` tags (NIP-92) and
+    https links to picture files in its text - at most four, no duplicates."""
+    from ..core.files import PICTURE_URL
+    out: dict[str, str] = {}
+    for t in ev.tags:
+        if t and t[0] == "imeta":
+            fields = dict(x.split(" ", 1) for x in t[1:] if " " in x)
+            url, mime = fields.get("url", ""), fields.get("m", "")
+            if url.startswith("https://") and (mime.startswith("image/") or PICTURE_URL.fullmatch(url)):
+                out.setdefault(url, fields.get("alt", "")[:512])
+    for m in PICTURE_URL.finditer(ev.content):
+        out.setdefault(m.group(0), "")
+    return list(out.items())[:4]
+
+
 def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
             now: datetime | None = None) -> Article:
     """Build the unsigned Unseenet article for one verified group event.
@@ -186,6 +202,8 @@ def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
     extra += origin_headers(NETWORK, ev.id, when, npub(ev.pubkey))
     extra.append(("Origin-Proof", ev.to_json()))
     extra.append(("Nostr-Kind", str(ev.kind)))
+    if pictures_of(ev):
+        extra.append(("Gateway-Media", "1"))     # the importer fetches them (core/files.py)
     exp = ev.tag("expiration")              # NIP-40: a request not to keep it (0026 4.5)
     if exp and exp.isdigit():
         base = now or datetime.now(timezone.utc)
