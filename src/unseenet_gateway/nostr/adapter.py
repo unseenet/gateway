@@ -82,6 +82,7 @@ class NostrAdapter(Adapter):
                 source=source_name(relay["url"], foreign), name=name,
                 group_id=self.group_id(name), direction=self.direction(relay),
                 title=f"Nostr: {foreign}",
+                view="chat",          # NIP-29 groups are chat rooms in Nostr clients (gateway#26)
                 description=(f"Gatewayed from the NIP-29 group {foreign} on {relay['url']} "
                              f"by {host}. Posts are signed by the gateway; the original "
                              "signed Nostr event is kept in Origin-Proof."))))

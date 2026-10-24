@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timezone
 from email.utils import format_datetime
 
+from unseenet.core.markup import MARKDOWN_TYPE
 from unseenet.core.article import MAX_SIZE, Article, new_article
 
 from ..core.adapter import Skip  # noqa: F401  (shared by all networks)
@@ -105,6 +106,20 @@ def root_and_parent(ev: Event) -> tuple[str | None, str | None]:
     return None, None
 
 
+# Markdown that Nostr clients write and show: links, emphasis, code, quotes, lists
+_MARKDOWN = re.compile(r"\[[^\]\n]+\]\((?:https?|unseenet|nostr):[^)\s]+\)"   # [text](url)
+                       r"|\*\*[^*\n]+\*\*|__[^_\n]+__"                       # strong
+                       r"|(?m:^```)|`[^`\n]+`"                                 # code
+                       r"|(?m:^>\s)|(?m:^[-*]\s+\S)|(?m:^\d+\.\s+\S)"         # quote, lists
+                       r"|(?m:^#{1,6}\s+\S)")                                 # heading
+
+
+def looks_like_markdown(text: str) -> bool:
+    """Whether a Nostr note is written in Markdown (gateway#26): then it goes in as
+    Markdown, else as plain text, so a lone * or _ is never taken for emphasis."""
+    return bool(_MARKDOWN.search(text))
+
+
 def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
             now: datetime | None = None) -> Article:
     """Build the unsigned Unseenet article for one verified group event.
@@ -139,7 +154,8 @@ def convert(ev: Event, *, group_id: str, id_map, title_of, name_of,
     from_name = clean(author, MAX_FROM) if author else short_npub(ev.pubkey)
     when = format_datetime(datetime.fromtimestamp(ev.created_at, timezone.utc))
 
-    extra = [("Content-Type", "text/plain; charset=utf-8"),
+    ctype = MARKDOWN_TYPE if looks_like_markdown(ev.content) else "text/plain; charset=utf-8"
+    extra = [("Content-Type", ctype),
              ("Message-Kind", "chat" if ev.kind == CHAT else "post")]
     extra += origin_headers(NETWORK, ev.id, when, npub(ev.pubkey))
     extra.append(("Origin-Proof", ev.to_json()))

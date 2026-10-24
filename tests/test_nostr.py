@@ -139,3 +139,27 @@ def test_names_from_profile_relay(monkeypatch):
     msg = sign_event(ALICE, 9, "hi", [["h", "lab"]])
     asyncio.run(i._fill_names([msg]))
     assert i.names[msg.pubkey] == "Alice A."
+
+
+def test_markdown_where_the_note_is_markdown():
+    """gateway#26: links, emphasis, code or lists go in as Markdown; plain stays plain."""
+    from unseenet_gateway.nostr.convert import looks_like_markdown
+    md = conv(sign_event(ALICE, 11, "See [the site](https://example.org) **now**",
+                         [["h", "lab"], ["title", "T"]]))
+    assert md["Content-Type"].startswith("text/markdown")
+    plain = conv(sign_event(BOB, 9, "2*3 is 6 and snake_case_name", [["h", "lab"]]))
+    assert plain["Content-Type"].startswith("text/plain")
+    assert looks_like_markdown("- one\n- two") and looks_like_markdown("use `x`")
+    assert not looks_like_markdown("#nostr is fun") and not looks_like_markdown("a * b")
+
+
+def test_nip29_groups_are_shown_as_chat():
+    from unseenet_gateway.nostr.adapter import NostrAdapter
+    from unseenet_gateway.usenet.adapter import UsenetAdapter
+    gw = {"group_owner": OWNER.key_text, "gateway_key": "/nonexistent/gw.key"}
+    ad = NostrAdapter({"gateway": gw, "nostr": {"prefix": "test.nostr",
+                       "relays": [{"url": "wss://relay.example", "groups": ["lab"]}]}})
+    [(_, c)] = ad._relay_groups(ad.relays()[0], "host")
+    assert c.view == "chat"
+    us = UsenetAdapter({"gateway": gw, "usenet": {"prefix": "test.usenet", "groups": ["comp.misc"]}})
+    assert [c.view for c in us.carried()] == ["threads"]

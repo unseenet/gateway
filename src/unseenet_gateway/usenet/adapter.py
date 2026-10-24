@@ -92,6 +92,7 @@ class UsenetAdapter(Adapter):
                 source=source, name=name, group_id=self.group_id(name),
                 direction=self.section.get("direction", "import"),
                 title=f"Usenet: {source}",
+                view="threads",       # Usenet is threads, and stays plain text (gateway#26)
                 description=(f"Gatewayed from the Usenet group {source} by {host}. "
                              "Posts are signed by the gateway, not by their authors.")))
         return out

@@ -14,9 +14,13 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 
 from unseenet.core.article import MAX_SIZE, Article, new_article
+from unseenet.core.markup import MARKDOWN_TYPE
 
 from ..core.adapter import Skip
 from ..core.origin import origin_headers
+from .html import to_markdown
+
+HTML_FORMAT = "org.matrix.custom.html"
 
 NETWORK = "matrix"
 MESSAGE, REDACTION, ENCRYPTED = "m.room.message", "m.room.redaction", "m.room.encrypted"
@@ -141,11 +145,16 @@ def convert(ev: dict, *, group_id: str, id_map, name_of, gateway_user: str | Non
         raise Skip("syntax", "no body")
     if not edit and reply_to(content):
         body = strip_reply_fallback(body)
+    markdown = None                 # formatted_body as Markdown (gateway#26)
+    if shown.get("format") == HTML_FORMAT and isinstance(shown.get("formatted_body"), str):
+        markdown = to_markdown(shown["formatted_body"]) or None
     sender = ev.get("sender", "")
     author = name_of(sender)
     from_name = clean(author, MAX_FROM) if author else clean(localpart(sender), MAX_FROM)
+    if markdown is not None:
+        body = markdown
     if msgtype == "m.emote":
-        body = f"* {from_name} {body}"
+        body = f"* {from_name} {body}" if markdown is None else f"\\* {from_name} {body}"
     if not body.strip():
         raise Skip("empty")
 
@@ -166,7 +175,8 @@ def convert(ev: dict, *, group_id: str, id_map, name_of, gateway_user: str | Non
     when = format_datetime(datetime.fromtimestamp(ts / 1000, timezone.utc)) \
         if isinstance(ts, int) else None
 
-    extra = [("Content-Type", "text/plain; charset=utf-8"), ("Message-Kind", "chat")]
+    ctype = MARKDOWN_TYPE if markdown is not None else "text/plain; charset=utf-8"
+    extra = [("Content-Type", ctype), ("Message-Kind", "chat")]
     extra += origin_headers(NETWORK, ev.get("event_id", ""), when, sender)
     extra.append(("Matrix-Room", ev.get("room_id", "")))
     if edit:
