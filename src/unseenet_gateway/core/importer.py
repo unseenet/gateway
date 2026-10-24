@@ -17,6 +17,7 @@ from unseenet.core import crypto
 from unseenet.core.article import Article, new_article
 from unseenet.nntp import NNTPError
 
+from . import files as fl
 from .adapter import Feed, Skip, Source
 from .state import State
 from .unseenet_side import Node
@@ -47,8 +48,10 @@ def cancel_article(group_id: str, target_mid: str, reason: str, *,
 
 class Importer:
     def __init__(self, *, feed: Feed, state: State, node: Node, gateway: crypto.Identity,
-                 pow_bits: int, delay_for=None):
+                 pow_bits: int, delay_for=None, pictures_max: int = 0):
         self.feed, self.state, self.node = feed, state, node
+        # pictures on imported messages, up to this size (0: none) - gateway#26
+        self.pictures_max = pictures_max if fl.core_posts_files() else 0
         self.gateway, self.pow_bits = gateway, pow_bits
         # group id -> seconds to wait before importing (rank x stagger), or None when this
         # gateway may not write there (UN-RFC 0038); None for the whole callable: no waiting
@@ -63,6 +66,24 @@ class Importer:
         for source in self.feed.sources():
             total.add(await self.run_source(source))
         return total
+
+    async def _pictures(self, source: Source, item, art: Article) -> tuple[list, int]:
+        """The message's pictures on the article, or a line saying they were left out."""
+        if not art.get("Gateway-Media"):
+            return [], 0
+        art.remove("Gateway-Media")          # only a mark from convert, never posted
+        media = []
+        if self.pictures_max:
+            try:
+                media = await self.feed.media(source, item)
+            except Exception as exc:  # noqa: BLE001 - the text still comes in
+                log.info("%s: picture not fetched: %s", item.label, exc)
+        blobs, bits, notes = fl.attach(art, media, self.pictures_max) if media else ([], 0, [])
+        if not blobs:
+            line = "(a picture was left out" + (": " + "; ".join(notes) if notes else
+                                                 " - this gateway carries no pictures") + ")"
+            art.body = (art.body.rstrip("\n") + "\n\n" + line + "\n").lstrip("\n")
+        return blobs, bits
 
     async def run_source(self, source: Source) -> RunStats:
         st, net = RunStats(), self.feed.network
@@ -83,9 +104,11 @@ class Importer:
                 self.state.count_skip(net, s.reason)
                 log.info("%s %s skipped: %s", source.foreign, item.label, s)
                 continue
+            blobs, extra_bits = await self._pictures(source, item, art)
             art.finalize(self.gateway, self.pow_bits)
             try:
-                result = await self.node.post(art)
+                result = await (self.node.post(art, blobs=blobs, extra_bits=extra_bits)
+                                if blobs else self.node.post(art))
             except NNTPError as exc:
                 st.refused += 1
                 self.state.count_skip(net, f"node-{exc.text.split(':')[0]}")

@@ -50,6 +50,9 @@ def openness(state: list[dict]) -> str | None:
     return None
 
 
+MEDIA_LIMIT = 8 * 1024 * 1024        # never download more for one picture
+
+
 class MatrixFeed(Feed):
     network = NETWORK
 
@@ -217,6 +220,21 @@ class MatrixFeed(Feed):
                        id_map=lambda eid: self.state.lookup(NETWORK, eid),
                        name_of=lambda uid: self.names.get((rid, uid)),
                        gateway_user=self.matrix.user_id)
+
+    async def media(self, source: Source, item: Incoming) -> list:
+        """The picture of an ``m.image`` message, downloaded (gateway#26)."""
+        from ..core.files import Media
+        content = (item.payload or {}).get("content") or {}
+        url, info = content.get("url"), content.get("info") or {}
+        if content.get("msgtype") != "m.image" or not isinstance(url, str):
+            return []
+        size = info.get("size") if isinstance(info, dict) else None
+        if isinstance(size, int) and size > MEDIA_LIMIT:
+            return []
+        name = content.get("filename") or content.get("body") or "picture"
+        alt = content.get("body", "") if content.get("filename") else ""
+        octets = await self.matrix.download(url, MEDIA_LIMIT)
+        return [Media(str(name)[:128], octets, str(alt)[:512])]
 
     def hold(self, source: Source, when: float) -> None:
         """Messages from ``when`` on wait for this gateway's turn: read them again."""

@@ -25,6 +25,7 @@ HTML_FORMAT = "org.matrix.custom.html"
 NETWORK = "matrix"
 MESSAGE, REDACTION, ENCRYPTED = "m.room.message", "m.room.redaction", "m.room.encrypted"
 TEXT_TYPES = ("m.text", "m.notice", "m.emote")
+PICTURE = "m.image"                 # a picture: its caption, and the picture (gateway#26)
 FROM_UNSEENET_KEY = "org.unseenet.message_id"   # set on events a gateway exported
 GATEWAY_NOTICE_KEY = "org.unseenet.gateway"     # on a gateway's own notices (UN-RFC 0037 6)
 MAX_FROM = 128
@@ -138,11 +139,18 @@ def convert(ev: dict, *, group_id: str, id_map, name_of, gateway_user: str | Non
     if not isinstance(shown, dict):
         raise Skip("syntax", "edit without m.new_content")
     msgtype = shown.get("msgtype")
-    if msgtype not in TEXT_TYPES:
+    picture = msgtype == PICTURE and not edit and isinstance(shown.get("url"), str) \
+        and shown["url"].startswith("mxc://")
+    if msgtype not in TEXT_TYPES and not picture:
         raise Skip("media", str(msgtype))          # UN-RFC 0023 4.1 item 3
     body = shown.get("body")
     if not isinstance(body, str):
         raise Skip("syntax", "no body")
+    if picture:                    # body is the caption when a filename is given (Matrix 1.10)
+        name = shown.get("filename")
+        body = body if isinstance(name, str) and name and body != name else ""
+        if not body.strip():
+            body = "(a picture)"
     if not edit and reply_to(content):
         body = strip_reply_fallback(body)
     markdown = None                 # formatted_body as Markdown (gateway#26)
@@ -183,6 +191,8 @@ def convert(ev: dict, *, group_id: str, id_map, name_of, gateway_user: str | Non
         extra.append(("Matrix-Edit", relation(content).get("event_id", "")))
     if msgtype != "m.text":
         extra.append(("Matrix-Msgtype", msgtype))
+    if picture:
+        extra.append(("Gateway-Media", "1"))     # the importer fetches it (core/files.py)
 
     art = new_article(group_id, "", body, from_name=from_name,
                       references=refs or None, extra=extra, now=now)

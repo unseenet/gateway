@@ -24,7 +24,7 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
                      retention_days: int = 90, submissions: str | None = None,
                      view: str = "", kinds: tuple[str, ...] = (), min_pow: int = 0,
                      peers: list[str] | None = None, requests: str | None = None,
-                     pow_bits: int = 18) -> Article:
+                     attachments: dict | None = None, pow_bits: int = 18) -> Article:
     """Manifest of a gatewayed group (UN-RFC 0023 section 3.2): moderated, gateway key as moderator."""
     if direction not in ("import", "both"):
         raise ValueError("direction must be 'import' or 'both'")
@@ -52,6 +52,8 @@ def gateway_manifest(owner: crypto.Identity, gateway: crypto.Identity, name: str
         data["view"] = view                  # UN-RFC 0008 section 3.1
     if kinds:
         data["kinds"] = list(kinds)          # UN-RFC 0028 section 4.1
+    if attachments:
+        data["attachments"] = attachments    # pictures it carries (UN-RFC 0027 5.1, #26)
     return manifest_article(owner, make_group_id(name, owner.public_key), data, pow_bits)
 
 
@@ -95,11 +97,13 @@ class Node:
             self.client = await Client.connect(self.address, self.socks_port)
         return self.client
 
-    async def post(self, art: Article) -> str:
-        """Post; returns 'ok', 'duplicate' or raises NNTPError for other refusals."""
+    async def post(self, art: Article, *, blobs=(), extra_bits: int = 0) -> str:
+        """Post; returns 'ok', 'duplicate' or raises NNTPError for other refusals.
+        ``blobs`` are the article's files (UN-RFC 0027), sent first, through a session."""
         mine = self._keys.get(art.author_key) if art.get("Author-Key") else None
         if mine is not None or self._keys:
-            return await self._post_by_session(art, mine[0] if mine else None)
+            return await self._post_by_session(art, mine[0] if mine else None,
+                                               blobs=blobs, extra_bits=extra_bits)
         for attempt in (1, 2):
             try:
                 c = await self._conn()
@@ -115,13 +119,18 @@ class Node:
             return "duplicate"
         raise NNTPError(code, text)
 
-    async def _post_by_session(self, art: Article, key: crypto.Identity | None) -> str:
+    async def _post_by_session(self, art: Article, key: crypto.Identity | None, *,
+                               blobs=(), extra_bits: int = 0) -> str:
         """Through the signing key's session; an article by another key (a submission,
         an owner's manifest from elsewhere) goes as it is, through the first one."""
         from unseenet.client.session import SessionError
         s = await self.session(key or next(iter(self._keys.values()))[0])
         try:
-            await s.post_article(art, node=self.address, sign_with=key)
+            if blobs:
+                await s.post_article(art, node=self.address, sign_with=key, blobs=list(blobs),
+                                     extra_bits=extra_bits)
+            else:
+                await s.post_article(art, node=self.address, sign_with=key)
         except SessionError as exc:
             text = str(exc).removeprefix("rejected by node: ")
             if text.startswith("duplicate"):
