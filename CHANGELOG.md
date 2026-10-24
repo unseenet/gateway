@@ -27,7 +27,15 @@ several gateways per group.
   then allow pictures up to that size (`create-groups` publishes them), and
   nodes must carry files. Without it, with a core before 0.5, or for a picture
   that is too big, the message comes in with a line saying a picture was left
-  out. Pictures from Nostr and out to Matrix are still to come.
+  out.
+- **Pictures in from NIP-29 groups** (#26), with the same setting: the pictures a
+  note links to - its `imeta` tags (NIP-92) or `https` links to picture files,
+  at most four - are fetched **only over the gateway's Tor**, never from its own
+  address, only from `https`, only pictures, at most 8 MiB, and posted as files
+  as from Matrix. NIP-29 groups are moderated by their relay's admins, as
+  Matrix rooms are; a note deleted there is cancelled here, and its pictures
+  with it. Without Tor, nothing is fetched and a line says so. Pictures out to
+  Matrix are still to come.
 - **Markdown in** (#26): a Matrix message's `formatted_body` comes in as
   Unseenet Markdown (UN-RFC 0031) - emphasis, code, links, quotes, lists,
   headings - with every HTML tag turned into Markdown or dropped, links only

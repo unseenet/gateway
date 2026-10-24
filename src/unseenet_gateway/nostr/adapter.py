@@ -113,7 +113,8 @@ class NostrAdapter(Adapter):
             state=state, relay=Relay(relay["url"], proxy=sec.get("proxy")),
             carried={f: c.group_id for f, c in self._relay_groups(relay)},
             start=relay.get("start", sec.get("start", "new")),
-            profile_relays=sec.get("profile_relays"), proxy=sec.get("proxy"))
+            profile_relays=sec.get("profile_relays"), proxy=sec.get("proxy"),
+            socks_port=getattr(node, "socks_port", None))
             for relay in self.relays()]
 
     async def is_member(self, feeds: list[Feed], source: str, account: str) -> bool | None:

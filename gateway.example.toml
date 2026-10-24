@@ -26,7 +26,8 @@ policy   = "Text only. Cleanfeed on the INN side. No logs beyond the Message-ID 
 # directory = "unseenet.gateways@ph5fc5hop5232qsz"
 
 pow_bits = 18      # postage paid per imported article (the node's minimum)
-# pictures_max_size = 1048576   # carry pictures in (Matrix m.image), up to this many octets;
+# pictures_max_size = 1048576   # carry pictures in (Matrix m.image, pictures NIP-29 notes link
+                                # to - fetched only over Tor), up to this many octets;
                                 # needs unseenet 0.5 and nodes that carry files (UN-RFC 0027)
 interval = 60      # seconds between passes in `run`
 

@@ -255,3 +255,64 @@ def test_usenet_joins_and_says_it_has_no_consent_of_its_own():
     own, joined = us.carried()
     assert not own.joined and joined.joined and joined.group_id == shared
     assert "approval alone" in us.consent_note
+
+
+# --- pictures in from NIP-29 groups (gateway#26) -----------------------------------
+
+def test_pictures_of_a_note():
+    from unseenet_gateway.nostr.convert import pictures_of
+    ev = sign_event(ALICE, 9, "Look https://nostr.build/i/cat.jpg and https://x.org/page "
+                    "http://plain.example/a.png https://nostr.build/i/cat.jpg",
+                    [["h", "lab"], ["imeta", "url https://img.example/dog", "m image/webp",
+                                    "alt A dog"]])
+    assert pictures_of(ev) == [("https://img.example/dog", "A dog"),
+                               ("https://nostr.build/i/cat.jpg", "")]
+    many = sign_event(ALICE, 9, " ".join(f"https://h.example/{i}.png" for i in range(6)), [["h", "lab"]])
+    assert len(pictures_of(many)) == 4
+    assert conv(ev)["Gateway-Media"] == "1"
+    assert "Gateway-Media" not in conv(sign_event(ALICE, 9, "no pictures", [["h", "lab"]]))
+
+
+def test_the_feed_fetches_them_and_the_importer_attaches_them():
+    import asyncio
+    import io
+    from unseenet_gateway.core import files as fl
+    from unseenet_gateway.core.importer import Importer
+    from unseenet_gateway.nostr.feed import NostrFeed
+    if not fl.core_posts_files():
+        pytest.skip("this core cannot post files (unseenet 0.5)")
+    Image = pytest.importorskip("PIL.Image")
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), (1, 2, 3)).save(buf, "PNG")
+    asked = []
+
+    async def fetch(url, limit):
+        asked.append(url)
+        if "broken" in url:
+            raise OSError("HTTP 404")
+        return buf.getvalue()
+
+    class R:
+        url = "wss://relay.example"
+    feed = NostrFeed(state=None, relay=R(), carried={}, fetch=fetch)
+    ev = sign_event(ALICE, 9, "https://p.example/ok.png https://p.example/broken.png", [["h", "lab"]])
+    item = type("I", (), {"payload": ev, "label": "#1"})()
+    media = asyncio.run(feed.media(None, item))
+    assert [m.name for m in media] == ["ok.png"] and len(asked) == 2
+
+    class Node:
+        async def post(self, art, **kw):
+            return "ok"
+    imp = Importer(feed=feed, state=None, node=Node(), gateway=GW, pow_bits=8, pictures_max=1 << 20)
+    art = conv(ev)
+    blobs, _ = asyncio.run(imp._pictures(None, item, art))
+    assert len(blobs) == 1 and art["Attachment-1"].startswith(blobs[0][0])
+
+
+def test_nothing_is_fetched_without_tor_or_from_plain_http():
+    import asyncio
+    from unseenet_gateway.core.files import fetch_over_tor
+    with pytest.raises(OSError, match="no Tor"):
+        asyncio.run(fetch_over_tor("https://p.example/a.png", None, 1000))
+    with pytest.raises(ValueError, match="only https"):
+        asyncio.run(fetch_over_tor("http://p.example/a.png", 9050, 1000))
