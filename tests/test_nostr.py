@@ -163,3 +163,95 @@ def test_nip29_groups_are_shown_as_chat():
     assert c.view == "chat"
     us = UsenetAdapter({"gateway": gw, "usenet": {"prefix": "test.usenet", "groups": ["comp.misc"]}})
     assert [c.view for c in us.carried()] == ["threads"]
+
+
+# --- several gateways for one group (UN-RFC 0038, gateway#16) ----------------------
+
+def test_npub_back_to_hex():
+    from unseenet_gateway.nostr.convert import npub_hex
+    pk = pubkey_of(ALICE).hex()
+    assert npub_hex(npub(pk)) == pk and npub_hex(pk) == pk
+    broken = npub(pk)[:-1] + ("q" if npub(pk)[-1] != "q" else "p")
+    assert npub_hex(broken) is None and npub_hex("nsec1abc") is None
+
+
+def _adapter(groups):
+    from unseenet_gateway.nostr.adapter import NostrAdapter
+    gw = {"group_owner": OWNER.key_text, "gateway_key": "/nonexistent/gw.key"}
+    return NostrAdapter({"gateway": gw, "nostr": {"prefix": "test.nostr", "relays": [
+        {"url": "wss://relay.example", "groups": groups}]}})
+
+
+def test_joining_another_gateways_group():
+    shared = make_group_id("nostr.shared", OWNER.public_key)
+    ad = _adapter(["own", {"id": "shared", "group": shared}])
+    own, joined = ad.carried()
+    assert not own.joined and joined.joined and joined.group_id == shared
+    assert joined.source == "wss://relay.example'shared" and joined.view == "chat"
+
+
+class _Relay:
+    url = "wss://relay.example"
+
+    def __init__(self, events):
+        self.events, self.queries, self.published = events, [], []
+
+    async def query(self, *filters):
+        self.queries.append(filters)
+        return self.events
+
+    async def publish(self, ev):
+        self.published.append(ev)
+        return True, ""
+
+
+def test_the_group_lists_say_whether_another_gateway_may_take_part():
+    import asyncio
+    from types import SimpleNamespace
+    ad = _adapter(["shared"])
+    other = pubkey_of(BOB).hex()
+    members = sign_event(ALICE, 39002, "", [["d", "shared"], ["p", other]])
+    feed = SimpleNamespace(relay=_Relay([members]))
+    src = "wss://relay.example'shared"
+    assert asyncio.run(ad.is_member([feed], src, npub(other))) is True
+    assert asyncio.run(ad.is_member([feed], src, npub(pubkey_of(ALICE).hex()))) is False
+    assert feed.relay.queries[0][0] == {"kinds": [39002, 39001], "#d": ["shared"]}
+    assert asyncio.run(ad.is_member([SimpleNamespace(relay=_Relay([]))], src, npub(other))) is None
+    assert asyncio.run(ad.is_member([feed], src, "not-a-key")) is None
+
+
+def test_export_is_skipped_when_another_gateway_sent_it_first():
+    import asyncio
+    from unseenet_gateway.core.state import State
+    from unseenet_gateway.nostr.exporter import NostrSender
+    mid = "<" + "c" * 32 + "@unseenet>"
+    theirs = sign_event(BOB, 9, "hi", [["h", "lab"], ["unseenet", mid]])
+    relay = _Relay([theirs])
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        state = State(Path(d) / "s.json")
+        state.set_cursor("nostr", "joined:wss://relay.example'lab", 1)
+        sender = NostrSender(relay=relay, secret=ALICE, state=state, groups={"g": "lab"})
+
+        class Art:
+            group, message_id = "g", mid
+            body = "hi\n"
+
+            @staticmethod
+            def get(name, default=None):
+                return default
+        assert asyncio.run(sender.send(Art)) == theirs.id
+    assert relay.published == []                       # nothing sent twice
+    assert asyncio.run(sender.retract(Art, theirs.id)) is False   # and theirs is not ours
+
+
+def test_usenet_joins_and_says_it_has_no_consent_of_its_own():
+    from unseenet_gateway.usenet.adapter import UsenetAdapter
+    shared = make_group_id("usenet.comp.misc", OWNER.public_key)
+    gw = {"group_owner": OWNER.key_text, "gateway_key": "/nonexistent/gw.key"}
+    us = UsenetAdapter({"gateway": gw, "usenet": {"prefix": "usenet", "groups": [
+        "alt.test", {"name": "comp.misc", "group": shared}]}})
+    own, joined = us.carried()
+    assert not own.joined and joined.joined and joined.group_id == shared
+    assert "approval alone" in us.consent_note

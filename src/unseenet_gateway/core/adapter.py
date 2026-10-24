@@ -217,6 +217,8 @@ class Adapter:
         """The counterpart for one [[portals]] entry of this network."""
         raise NotImplementedError
 
+    consent_note = ""          # said in a join request when is_member cannot tell
+
     async def is_member(self, feeds: list[Feed], source: str, account: str) -> bool | None:
         """Whether another gateway's ``account`` takes part in ``source`` (its consent
         there, UN-RFC 0038 3.2); None if this network cannot tell."""

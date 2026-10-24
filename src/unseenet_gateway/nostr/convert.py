@@ -62,6 +62,32 @@ def npub(pubkey_hex: str) -> str:
     return hrp + "1" + "".join(_BECH32[d] for d in data + checksum)
 
 
+def npub_hex(value: str) -> str | None:
+    """The hex public key of an ``npub1...`` (NIP-19), or of 64 hex digits; None if
+    it is neither or its checksum is wrong."""
+    value = value.strip().lower()
+    if len(value) == 64 and all(c in "0123456789abcdef" for c in value):
+        return value
+    if not value.startswith("npub1"):
+        return None
+    try:
+        data = [_BECH32.index(c) for c in value[5:]]
+    except ValueError:
+        return None
+    hrp = "npub"
+    exp = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+    if len(data) < 7 or _polymod(exp + data) != 1:
+        return None
+    acc, bits, out = 0, 0, bytearray()
+    for v in data[:-6]:
+        acc = (acc << 5) | v
+        bits += 5
+        if bits >= 8:
+            bits -= 8
+            out.append((acc >> bits) & 0xFF)
+    return out.hex() if len(out) == 32 else None
+
+
 def short_npub(pubkey_hex: str) -> str:
     n = npub(pubkey_hex)
     return n[:12] + "…" + n[-4:]

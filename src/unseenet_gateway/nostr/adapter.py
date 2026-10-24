@@ -7,7 +7,13 @@ Configuration, section [nostr], with one relay::
     host      = "gateway.example.org"
     direction = "import"          # or "both"
     start     = "new"             # or "all"
-    groups    = ["group-id", {id = "other", name = "chosen.name"}]
+    groups    = ["group-id", {id = "other", name = "chosen.name"},
+                 {id = "shared", group = "nostr.shared@<fingerprint>"}]
+
+``group`` joins a group another gateway publishes instead of making one, so
+several gateways serve it and it survives one of them going (UN-RFC 0038):
+that gateway's operator admits this one, and the NIP-29 group must list this
+gateway's key as a member or an admin - its consent there (``is_member``).
 
 or several, one [[nostr.relays]] table each (url, groups, and optionally
 direction and start). Optional: `proxy`, `profile_relays`, and the gateway's
@@ -23,7 +29,7 @@ from unseenet.core import crypto
 
 from ..core import keys
 from ..core.adapter import Adapter, Capabilities, Carried, Feed, Send
-from .convert import NETWORK, npub, unseenet_name
+from .convert import NETWORK, npub, npub_hex, unseenet_name
 from .event import N as SECP_N, pubkey_of
 from .exporter import NostrSender
 from .feed import NostrFeed, source_name
@@ -31,6 +37,7 @@ from .portal import NostrCounterpart
 from .relay import Relay
 
 log = logging.getLogger(__name__)
+ADMINS, MEMBERS = 39001, 39002        # NIP-29: the relay's lists for a group
 PASSPHRASE = ("UNSEENET_GATEWAY_PASSPHRASE", "Passphrase for the GATEWAY key: ")
 
 
@@ -74,6 +81,13 @@ class NostrAdapter(Adapter):
         out = []
         for g in relay.get("groups", []):
             foreign, wanted = (g["id"], g.get("name")) if isinstance(g, dict) else (g, None)
+            joined = g.get("group") if isinstance(g, dict) else None
+            if joined:                  # another gateway's group (UN-RFC 0038 3.2)
+                out.append((foreign, Carried(
+                    source=source_name(relay["url"], foreign), name=joined.partition("@")[0],
+                    group_id=joined, direction=self.direction(relay),
+                    title=f"Nostr: {foreign}", description="", view="chat", joined=True)))
+                continue
             name = f"{self.prefix}.{wanted}" if wanted else unseenet_name(foreign, self.prefix)
             if name is None:
                 log.warning("%s cannot be gatewayed (name)", foreign)
@@ -101,6 +115,26 @@ class NostrAdapter(Adapter):
             start=relay.get("start", sec.get("start", "new")),
             profile_relays=sec.get("profile_relays"), proxy=sec.get("proxy"))
             for relay in self.relays()]
+
+    async def is_member(self, feeds: list[Feed], source: str, account: str) -> bool | None:
+        """Whether ``account`` (an npub) is on the NIP-29 group's member list (kind
+        39002) or admin list (39001), as the relay publishes them: the group's consent
+        to another gateway (UN-RFC 0038 3.2). None if it cannot be told."""
+        url, _, group = source.rpartition("'")
+        want = npub_hex(account)
+        if not url or not group or want is None:
+            return None
+        relay = next((f.relay for f in feeds if getattr(f, "relay", None)
+                      and f.relay.url == url), None)
+        if relay is None:
+            relay = Relay(url, proxy=self.section.get("proxy"))
+        try:
+            lists = await relay.query({"kinds": [MEMBERS, ADMINS], "#d": [group]})
+        except Exception:  # noqa: BLE001
+            return None
+        if not lists:
+            return None
+        return any(t[:2] == ["p", want] for ev in lists for t in ev.tags)
 
     def export_targets(self, *, state, feeds: list[Feed]) -> dict[str, Send]:
         relays = [r for r in self.relays() if self.direction(r) == "both"]
