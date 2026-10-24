@@ -122,6 +122,9 @@ def test_nostr_takes_back_with_a_deletion_of_its_own_event():
 
     class Art:
         group, message_id = "g", "<x@unseenet>"
+    assert asyncio.run(sender.retract(Art, "cd" * 32)) is False    # not ours: left alone
+    assert relay.events == []
+    sender._sent.add("ab" * 32)
     assert asyncio.run(sender.retract(Art, "ab" * 32)) is True
     ev = relay.events[0]
     assert ev.kind == DELETION and ["e", "ab" * 32] in ev.tags and ["h", "lab-room"] in ev.tags

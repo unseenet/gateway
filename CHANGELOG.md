@@ -11,6 +11,14 @@ several gateways per group.
 ## [Unreleased]
 
 ### Added
+- **Several gateways for Nostr and Usenet groups too** (#16, UN-RFC 0038), as
+  for Matrix: `groups = [{id = ..., group = "...@<fingerprint>"}]` (Nostr) or
+  `[{name = ..., group = ...}]` (Usenet) helps serve a group another gateway
+  publishes. For Nostr, the other side's consent is the gateway's key on the
+  NIP-29 group's member or admin list, shown to the owner's operator in the
+  join request; Usenet has none, and the request says that admission rests on
+  their approval alone. Before exporting to Nostr, a gateway looks whether
+  another one sent the article already, and takes back only events it sent.
 - **Pictures in from Matrix** (#26): an `m.image` message comes in as a chat
   line with its caption and the picture, downloaded through Matrix's
   authenticated media API, cleaned of metadata by the core as every client

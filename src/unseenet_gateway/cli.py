@@ -436,7 +436,9 @@ async def consider_join(cfg: dict, desk: Desk, ads: list[Adapter], feeds: list, 
     seen = {None: "cannot be checked", True: "yes", False: "NO - it has not been invited"}[member]
     detail = (f"Another gateway asks to help serve {jr.group}.\n"
               f"Gateway key: {jr.sender}\nIts {jr.network} account: {jr.account}\n"
-              f"In {c.source}: {seen}\nIts operator: {jr.operator}\nContact: {jr.contact}\n\n"
+              f"In {c.source}: {seen}\n"
+              + (f"{ad.consent_note}\n" if member is None and ad.consent_note else "")
+              + f"Its operator: {jr.operator}\nContact: {jr.contact}\n\n"
               "If approved, it is added to the group's gateways in a new manifest; the "
               "gateways then take turns (UN-RFC 0038).")
     await desk.ask(JOIN, f"{jr.group}|{jr.sender}", title=f"{jr.group} (another gateway)",

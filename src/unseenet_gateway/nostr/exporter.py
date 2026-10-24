@@ -41,6 +41,7 @@ class NostrSender:
         self.url = (public_url or relay.url).rstrip("/")
         self.groups = groups            # Unseenet Group ID -> NIP-29 group id on this relay
         self.pubkey = pubkey_of(secret).hex()
+        self._sent: set[str] = set()    # events this gateway sent: the only ones it takes back
 
     async def ensure_member(self, group: str) -> None:
         flag = f"joined:{self.relay.url}'{group}"
@@ -63,9 +64,25 @@ class NostrSender:
                     return found[0]
         return None
 
+    async def already_there(self, group: str, message_id: str, limit: int = 500) -> str | None:
+        """The event id if the group already has this article, sent by any gateway
+        (UN-RFC 0038 section 5): another gateway's turn came first. Relays index only
+        one-letter tags, so the group's recent events are read and their ``unseenet``
+        tag compared here."""
+        events = await self.relay.query({"#h": [group], "kinds": [THREAD, CHAT, COMMENT],
+                                         "limit": limit})
+        for ev in events:
+            if any(t[:2] == [FROM_UNSEENET_TAG, message_id] for t in ev.tags):
+                return ev.id
+        return None
+
     async def send(self, art: Article) -> str:
         group = self.groups[art.group]
         await self.ensure_member(group)
+        there = await self.already_there(group, art.message_id)
+        if there:
+            log.info("%s is already in %s as %s", art.message_id, group, there)
+            return there
         parent = await self._parent(art)
         content = art.body.rstrip("\n") + signature_line(art)
         tags = [["h", group], [FROM_UNSEENET_TAG, art.message_id]]
@@ -89,15 +106,20 @@ class NostrSender:
         ok, msg = await self.relay.publish(ev)
         if not ok:
             raise ExportError(msg)
+        self._sent.add(ev.id)
         return ev.id
 
     async def retract(self, art: Article, foreign_id: str) -> bool:
         """Take back an event this gateway sent, when the node refused the approved
         copy (#18): a NIP-09 deletion (kind 5) of our own event, in the same group."""
+        if foreign_id not in self._sent:   # another gateway's (already_there): not ours
+            return False
         reason = "Not accepted in Unseenet, so taken back by the gateway"
         tags = [["e", foreign_id], ["h", self.groups[art.group]]]
         ev = sign_event(self.secret, DELETION, reason, tags)
         ok, msg = await self.relay.publish(ev)
         if not ok:
             log.warning("could not take back %s on %s: %s", foreign_id, self.relay.url, msg)
+        else:
+            self._sent.discard(foreign_id)
         return ok

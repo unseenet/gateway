@@ -78,12 +78,24 @@ class UsenetFeed(Feed):
 
 class UsenetAdapter(Adapter):
     network = NETWORK
+    # Usenet has nothing like a member list: the same article reaches every gateway
+    # from the servers, so admission rests on the group owner's approval alone
+    consent_note = ("Usenet has no consent of its own: anyone can read a newsgroup, so "
+                    "admission rests on your approval alone.")
     capabilities = Capabilities()          # import only; export is not implemented yet
 
     def carried(self) -> list[Carried]:
         host = self.host()
         out = []
-        for source in self.section["groups"]:
+        for entry in self.section["groups"]:
+            source = entry["name"] if isinstance(entry, dict) else entry
+            joined = entry.get("group") if isinstance(entry, dict) else None
+            if joined:                  # another gateway's group (UN-RFC 0038 3.2)
+                out.append(Carried(
+                    source=source, name=joined.partition("@")[0], group_id=joined,
+                    direction=self.section.get("direction", "import"),
+                    title=f"Usenet: {source}", description="", view="threads", joined=True))
+                continue
             name = unseenet_name(source, self.prefix)
             if name is None:
                 log.warning("%s cannot be gatewayed (name)", source)

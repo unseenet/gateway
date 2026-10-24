@@ -42,6 +42,9 @@ start     = "new"             # first run: "new", "all" or "last:N"
 max_per_run = 200
 groups = [
     "comp.misc",
+    # help serve a group another gateway publishes (UN-RFC 0038), so it survives
+    # either gateway going; its operator admits this one:
+    # {name = "comp.lang.python", group = "usenet.comp.lang.python@<fingerprint>"},
 ]
 
 # Optional: Nostr groups (NIP-29) on one relay.
@@ -51,7 +54,9 @@ groups = [
 # host      = "gateway.example.org"
 # direction = "import"
 # start     = "new"             # or "all"
-# groups    = ["group-id"]
+# groups    = ["group-id", {id = "shared", group = "nostr.shared@<fingerprint>"}]
+#             # the second joins another gateway's group; the NIP-29 group must list
+#             # this gateway's Nostr key as a member or admin (UN-RFC 0038)
 
 # Optional: Matrix rooms (public, unencrypted) through one bot account.
 # The rooms' moderators must invite the account; it declines encrypted or
