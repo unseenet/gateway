@@ -11,7 +11,15 @@ several gateways per group.
 ## [Unreleased]
 
 ### Added
-
+- **Pictures in from Matrix** (#26): an `m.image` message comes in as a chat
+  line with its caption and the picture, downloaded through Matrix's
+  authenticated media API, cleaned of metadata by the core as every client
+  does, and posted as a file (UN-RFC 0027). Turned on with
+  `gateway.pictures_max_size` (octets, e.g. `1048576`): the groups' manifests
+  then allow pictures up to that size (`create-groups` publishes them), and
+  nodes must carry files. Without it, with a core before 0.5, or for a picture
+  that is too big, the message comes in with a line saying a picture was left
+  out. Pictures from Nostr and out to Matrix are still to come.
 - **Markdown in** (#26): a Matrix message's `formatted_body` comes in as
   Unseenet Markdown (UN-RFC 0031) - emphasis, code, links, quotes, lists,
   headings - with every HTML tag turned into Markdown or dropped, links only

@@ -40,6 +40,7 @@ from .core.portal import Portal
 from .core.registry import adapters
 from .core.state import State
 from .core.submissions import Exporter, inbox_manifest
+from .core.files import attachments_field
 from .core.unseenet_side import Node, gateway_manifest
 
 log = logging.getLogger("unseenet_gateway")
@@ -119,6 +120,7 @@ async def publish_manifest(cfg: dict, ad: Adapter, c, owner, gateway, node: Node
         # minimum (0023 5.2), so say it here or every submission would be refused
         min_pow=int(gw.get("export_min_pow", 20)) if c.direction == "both" else 0,
         peers=peers, requests=inbox,
+        attachments=attachments_field(int(gw.get("pictures_max_size", 0))),
         serial=serial,
         retention_days=int(ad.section.get("retention_days", 90)),
         pow_bits=int(gw.get("pow_bits", 18)))
@@ -241,7 +243,8 @@ def make_portals(cfg: dict, gateway, state: State, node: Node, feeds: list) -> l
             state=state, node=node, gateway=gateway,
             counterpart=ad.counterpart(p, state=state, feeds=feeds),
             group_id=p["group"], pow_bits=pow_bits,
-            delay_max=float(p.get("delay_max", gw.get("export_delay_max", 600)))))
+            delay_max=float(p.get("delay_max", gw.get("export_delay_max", 600))),
+            pictures_max=int(gw.get("pictures_max_size", 0))))
     return out
 
 
@@ -314,8 +317,10 @@ async def cmd_import(cfg: dict, loop: bool) -> None:
         watcher.views.update({g: v for g, v in seen.items() if g in watcher.views})
         seen.update(watcher.views)
         tasks: list = [watcher]
+        pictures = int(gw.get("pictures_max_size", 0))     # gateway#26
         tasks += [Importer(feed=f, state=state, node=node, gateway=gateway,
-                           pow_bits=pow_bits, delay_for=watcher.delay) for f in feeds]
+                           pow_bits=pow_bits, delay_for=watcher.delay, pictures_max=pictures)
+                  for f in feeds]
         tasks += make_portals(cfg, gateway, state, node, feeds)
         if gw.get("directory", DEFAULT_DIRECTORY):       # "" turns announcing off
             tasks.append(Announcer(cfg=cfg, ads=ads, state=state, node=node, gateway=gateway,

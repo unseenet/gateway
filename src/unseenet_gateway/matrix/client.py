@@ -75,6 +75,29 @@ class Matrix:
                    body: dict | None = None) -> dict:
         return await asyncio.to_thread(self._call, method, path, params, body)
 
+    def _download(self, mxc: str, limit: int) -> bytes:
+        """The octets of ``mxc://<server>/<id>``, through the authenticated media API
+        (Matrix 1.11), at most ``limit`` octets."""
+        server, _, media_id = mxc.removeprefix("mxc://").partition("/")
+        if not server or not media_id or "/" in media_id:
+            raise MatrixError(400, "M_INVALID_PARAM", "not an mxc:// URI")
+        url = (f"{self.base}/_matrix/client/v1/media/download/{q(server)}/{q(media_id)}"
+               "?allow_redirect=false")
+        req = urllib.request.Request(url, method="GET")
+        if self.token:
+            req.add_header("Authorization", f"Bearer {self.token}")
+        try:
+            with self.opener.open(req, timeout=self.timeout) as resp:
+                data = resp.read(limit + 1)
+        except urllib.error.HTTPError as exc:
+            raise MatrixError(exc.code, "M_UNKNOWN", "media download refused") from None
+        if len(data) > limit:
+            raise MatrixError(413, "M_TOO_LARGE", f"more than {limit} octets")
+        return data
+
+    async def download(self, mxc: str, limit: int) -> bytes:
+        return await asyncio.to_thread(self._download, mxc, limit)
+
     async def close(self) -> None:
         pass
 

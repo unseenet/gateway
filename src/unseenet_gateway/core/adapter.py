@@ -129,6 +129,11 @@ class Feed:
         """The unsigned Unseenet article for ``item``; raise :class:`Skip` to leave it out."""
         raise NotImplementedError
 
+    async def media(self, source: Source, item: Incoming) -> list:
+        """The files (``core.files.Media``) the message carries, downloaded; [] by
+        default. Called only when the gateway carries pictures (gateway#26)."""
+        return []
+
     def imported(self, item: Incoming, art: Article) -> None:
         """Called after ``item`` was posted to Unseenet as ``art``."""
 

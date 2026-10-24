@@ -100,13 +100,14 @@ def exportable(art: Article, gateway_pk: bytes) -> str | None:
 class Portal:
     def __init__(self, *, state: State, node: Node, gateway: crypto.Identity,
                  counterpart: Counterpart, group_id: str, pow_bits: int,
-                 delay_max: float = 600):
+                 delay_max: float = 600, pictures_max: int = 0):
         self.state, self.node, self.gateway = state, node, gateway
         self.counterpart, self.group_id = counterpart, group_id
         self.network, self.source = counterpart.network, counterpart.source
         self.delay_max = delay_max
         self.importer = Importer(feed=counterpart.feed, state=state, node=node,
-                                 gateway=gateway, pow_bits=pow_bits)
+                                 gateway=gateway, pow_bits=pow_bits,
+                                 pictures_max=pictures_max)
         self.label = f"portal {group_id}"
         self.manifest: Manifest | None = None
         self.pending: dict[str, _Pending] = {}

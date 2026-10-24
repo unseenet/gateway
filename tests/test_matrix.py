@@ -63,7 +63,8 @@ def test_from_falls_back_to_localpart_and_emote():
 
 
 @pytest.mark.parametrize("e,reason", [
-    (ev(msgtype="m.image", url="mxc://x/y"), "media"),
+    (ev(msgtype="m.video", url="mxc://x/y"), "media"),
+    (ev(msgtype="m.image", url="https://elsewhere/y.png"), "media"),   # only mxc://
     (ev(msgtype="m.file"), "media"),
     (ev(etype="m.room.encrypted"), "encrypted"),
     (ev(etype="m.reaction"), "type"),
@@ -367,3 +368,80 @@ def test_lists_quotes_and_code():
 def test_plain_text_stays_plain():
     art = conv(ev("Just *text*"))
     assert art["Content-Type"].startswith("text/plain") and art.body.strip() == "Just *text*"
+
+
+# --- pictures in (gateway#26) ------------------------------------------------------
+
+def test_a_picture_is_a_chat_line_with_its_caption_and_a_mark():
+    art = conv(ev("A cat", msgtype="m.image", url="mxc://example.org/abc", filename="cat.png"))
+    assert art.body.strip() == "A cat" and art["Gateway-Media"] == "1"
+    bare = conv(ev("IMG_1.jpg", msgtype="m.image", url="mxc://example.org/abc"))
+    assert bare.body.strip() == "(a picture)"           # a filename is not a caption
+
+
+class _Feed:
+    network = "matrix"
+
+    def __init__(self, files):
+        self.files = files
+
+    async def media(self, source, item):
+        return self.files
+
+
+class _Node:
+    def __init__(self):
+        self.posted = []
+
+    async def post(self, art, *, blobs=(), extra_bits=0):
+        self.posted.append((art, list(blobs), extra_bits))
+        return "ok"
+
+
+def _png(size=8):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (size, size), (200, 30, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_the_importer_puts_the_picture_on_the_article():
+    import asyncio
+    import pytest
+    from unseenet_gateway.core import files as fl
+    from unseenet_gateway.core.importer import Importer
+    if not fl.core_posts_files():
+        pytest.skip("this core cannot post files (unseenet 0.5)")
+    pytest.importorskip("PIL")
+    imp = Importer(feed=_Feed([fl.Media("cat.png", _png(), "A red square")]), state=None,
+                   node=_Node(), gateway=GW, pow_bits=8, pictures_max=1 << 20)
+    art = conv(ev("A cat", msgtype="m.image", url="mxc://example.org/abc", filename="cat.png"))
+    blobs, bits = asyncio.run(imp._pictures(None, type("I", (), {"label": "#1"})(), art))
+    assert len(blobs) == 1 and art.get("Blobs", "").startswith(blobs[0][0])
+    assert "Gateway-Media" not in art and art["Attachment-1"].startswith(blobs[0][0])
+    assert bits >= 0 and art.body.strip() == "A cat"
+
+
+def test_without_pictures_a_line_says_one_was_left_out():
+    import asyncio
+    from unseenet_gateway.core import files as fl
+    from unseenet_gateway.core.importer import Importer
+    imp = Importer(feed=_Feed([fl.Media("cat.png", b"x")]), state=None, node=_Node(),
+                   gateway=GW, pow_bits=8, pictures_max=0)
+    art = conv(ev("A cat", msgtype="m.image", url="mxc://example.org/abc", filename="cat.png"))
+    blobs, _ = asyncio.run(imp._pictures(None, type("I", (), {"label": "#1"})(), art))
+    assert blobs == [] and "Gateway-Media" not in art
+    assert art.body.strip().endswith("(a picture was left out - this gateway carries no pictures)")
+
+
+def test_a_gatewayed_group_says_it_takes_pictures():
+    from unseenet_gateway.core import files as fl
+    from unseenet_gateway.core.unseenet_side import gateway_manifest
+    att = fl.attachments_field(1 << 20)
+    art = gateway_manifest(OWNER, GW, "test.matrix.lab", network="matrix", source="#lab:x",
+                           direction="import", host="@gw:x", operator="o", contact="c",
+                           attachments=att, pow_bits=8)
+    if fl.core_posts_files():
+        assert '"attachments"' in art.body and '"image/*"' in art.body
+    assert fl.attachments_field(0) is None
