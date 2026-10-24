@@ -10,6 +10,20 @@ several gateways per group.
 
 ## [Unreleased]
 
+### Added
+
+- **Markdown in** (#26): a Matrix message's `formatted_body` comes in as
+  Unseenet Markdown (UN-RFC 0031) - emphasis, code, links, quotes, lists,
+  headings - with every HTML tag turned into Markdown or dropped, links only
+  to `http(s)`, `unseenet:` and `mailto:`, and the quoted reply (`<mx-reply>`)
+  left out. A Nostr note written in Markdown (links, emphasis, code, lists)
+  comes in as Markdown; other notes stay plain text, so a lone `*` is never
+  emphasis. Usenet stays plain text.
+- **Each network's default view** (#26): NIP-29 groups are shown as chat, as
+  in Nostr clients; Usenet groups as threads; Matrix rooms as chat, as before.
+  Readers can always switch. Run `unseenet-gateway create-groups` to give
+  groups that exist already their new manifest.
+
 ## [0.1.0] - 2026-10-22
 
 The first release. Works with unseenet 0.4 (`unseenet>=0.4.1,<0.5`); nodes

@@ -326,3 +326,44 @@ def test_another_gateways_notice_is_never_imported():
     with pytest.raises(Skip):
         convert(ev, group_id="matrix.x.r@aaaaaaaaaaaaaaaa", id_map=lambda e: None,
                 name_of=lambda u: None, gateway_user="@gw1:x")
+
+
+# --- formatted_body as Markdown (gateway#26) ---------------------------------------
+
+def test_formatted_body_comes_in_as_markdown():
+    e = ev("Hello *world* (plain)", format="org.matrix.custom.html",
+           formatted_body='<b>Hello</b> <a href="https://example.org">world</a> 2*3')
+    art = conv(e).finalize(GW, 8)
+    raw = art.to_bytes()
+    validate_structure(Article.from_bytes(raw), raw_size=len(raw), now=NOW)
+    assert art["Content-Type"].startswith("text/markdown")
+    assert art.body.strip() == r"**Hello** [world](https://example.org) 2\*3"
+
+
+def test_no_html_is_passed_on_and_bad_links_are_dropped():
+    from unseenet_gateway.matrix.html import to_markdown
+    md = to_markdown('<script>x()</script><span onclick="y()">hi</span> '
+                     '<a href="javascript:alert(1)">click</a> <img src="mxc://a/b" alt="cat">')
+    assert "<" not in md and "javascript" not in md and md.strip() == "hi click cat"
+
+
+def test_markdown_reply_leaves_the_quoted_fallback_out():
+    e = ev("> <@bob:example.org> old\n\nnew", format="org.matrix.custom.html",
+           formatted_body="<mx-reply><blockquote>old</blockquote></mx-reply><i>new</i>",
+           rel={"m.in_reply_to": {"event_id": "$old"}})
+    art = conv(e, ids={"$old": MID})
+    assert art.body.strip() == "*new*" and art["References"] == MID
+
+
+def test_lists_quotes_and_code():
+    from unseenet_gateway.matrix.html import to_markdown
+    assert to_markdown("<ul><li>a</li><li>b</li></ul>") == "- a\n- b\n"
+    assert to_markdown('<ol start="3"><li>x</li></ol>') == "3. x\n"
+    assert to_markdown("<blockquote>q</blockquote>after") == "> q\n\nafter\n"
+    assert to_markdown("<pre><code>a = 1\n</code></pre>") == "```\na = 1\n```\n"
+    assert to_markdown("1. no list") == "1\\. no list\n"
+
+
+def test_plain_text_stays_plain():
+    art = conv(ev("Just *text*"))
+    assert art["Content-Type"].startswith("text/plain") and art.body.strip() == "Just *text*"
